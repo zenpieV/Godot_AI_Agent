@@ -73,6 +73,36 @@ func route_request(
 		)
 
 	# ======================================
+	# Route: /validate_node_type
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/validate_node_type"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"validate_node_type_from_request"
+		)
+
+	# ======================================
+	# Route: /list_available_node_types
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/list_available_node_types"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"list_available_node_types_from_request"
+		)
+
+	# ======================================
 	# Route: /get_node_properties
 	# ======================================
 
@@ -85,6 +115,21 @@ func route_request(
 			body_text,
 			property_tools,
 			"get_node_properties_from_request"
+		)
+
+	# ======================================
+	# Route: /get_node_property
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/get_node_property"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"get_node_property_from_request"
 		)
 
 	# ======================================

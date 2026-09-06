@@ -190,6 +190,90 @@ def get_node_properties(
     )
 
 
+def get_node_property(
+    node_path,
+    property_name
+):
+    """
+    Retrieve ONE editor-visible readable
+    property value from a node in the
+    currently edited scene.
+
+    Preferred over get_node_properties when
+    only a single property value is needed.
+
+    node_path must be relative to the edited
+    scene root.
+
+    Use "." for the scene root.
+    """
+
+    payload = {
+        "node_path": node_path,
+        "property_name": property_name
+    }
+
+    return _request_json(
+        endpoint="/get_node_property",
+        method="POST",
+        payload=payload
+    )
+
+
+def validate_node_type(
+    node_type
+):
+    """
+    Ask the Godot editor bridge whether the
+    given class name is a valid, instantiable
+    Godot node type usable for scene node
+    creation.
+
+    The result is authoritative: the bridge
+    checks the real ClassDB of the running
+    editor.
+    """
+
+    payload = {
+        "node_type": node_type
+    }
+
+    return _request_json(
+        endpoint="/validate_node_type",
+        method="POST",
+        payload=payload
+    )
+
+
+def list_available_node_types(
+    inherits_from=None,
+    name_contains=None,
+    limit=None,
+):
+    """
+    Return a bounded, deterministic list of native,
+    instantiable Godot Node class names from the
+    running editor's ClassDB.
+
+    Optional filters restrict results by parent class
+    and case-insensitive name substring. The bridge
+    reports total_matches and truncated so callers do
+    not mistake a bounded result for a full class list.
+    """
+
+    payload = {
+        "inherits_from": inherits_from,
+        "name_contains": name_contains,
+        "limit": limit,
+    }
+
+    return _request_json(
+        endpoint="/list_available_node_types",
+        method="POST",
+        payload=payload,
+    )
+
+
 # ==========================================
 # Scene modification
 # ==========================================

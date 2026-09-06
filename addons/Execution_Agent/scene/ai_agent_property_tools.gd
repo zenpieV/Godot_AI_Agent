@@ -158,6 +158,216 @@ func get_node_properties_from_request(
 
 
 # ==========================================
+# get_node_property
+# ==========================================
+
+
+func get_node_property_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_property requires "
+				+ "node_path."
+			)
+		}
+
+	if not data.has("property_name"):
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_property requires "
+				+ "property_name."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	if node_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_property requires a "
+				+ "non-empty node_path (use \".\" "
+				+ "for the edited scene root)."
+			)
+		}
+
+	var property_name: String = (
+		str(data["property_name"]).strip_edges()
+	)
+
+	if property_name.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_property requires a "
+				+ "non-empty property_name."
+			)
+		}
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	# Locate the requested property in the
+	# node's actual property list. Only
+	# editor-visible properties are exposed
+	# through this tool, matching the property
+	# set returned by get_node_properties.
+	#
+	# Node.name is the one intentional exception:
+	# it is editor-visible in the scene tree and
+	# readable on every Node, but Godot does not
+	# mark it with PROPERTY_USAGE_EDITOR. Keep it
+	# read-only here because name changes must use
+	# the dedicated, undoable rename_node action.
+	var property_info := {}
+
+	var found := false
+
+	if property_name == "name":
+
+		property_info = {
+			"type": TYPE_STRING_NAME,
+			"usage": PROPERTY_USAGE_READ_ONLY
+		}
+
+		found = true
+
+	else:
+
+		for entry in (
+			target_node
+			.get_property_list()
+		):
+
+			if (
+				str(
+					entry.get(
+						"name",
+						""
+					)
+				)
+				== property_name
+			):
+
+				var usage := int(
+					entry.get(
+						"usage",
+						0
+					)
+				)
+
+				if (
+					usage
+					& PROPERTY_USAGE_EDITOR
+				) != 0:
+
+					property_info = entry
+
+					found = true
+
+					break
+
+	if not found:
+
+		return {
+			"success": false,
+			"error": (
+				"Property not found: "
+				+ property_name
+				+ " on node "
+				+ str(target_node.name)
+				+ "."
+			)
+		}
+
+	var property_type := int(
+		property_info.get(
+			"type",
+			TYPE_NIL
+		)
+	)
+
+	var is_read_only := (
+		int(
+			property_info.get(
+				"usage",
+				0
+			)
+		)
+		& PROPERTY_USAGE_READ_ONLY
+	) != 0
+
+	# Read the actual current value from the
+	# node. Never fabricated.
+	var current_value
+
+	if property_name == "name":
+		current_value = target_node.name
+	else:
+		current_value = target_node.get(property_name)
+
+	return {
+		"success": true,
+		"action": "get_node_property",
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": (
+			str(target_node.name)
+		),
+		"node_type": (
+			target_node.get_class()
+		),
+		"property_name": property_name,
+		"property_type": (
+			type_string(
+				property_type
+			)
+		),
+		"property_type_id": property_type,
+		"editable": (
+			not is_read_only
+		),
+		"value": (
+			variant_serializer
+			.serialize_property_value(
+				current_value
+			)
+		)
+	}
+
+
+# ==========================================
 # set_properties
 # ==========================================
 

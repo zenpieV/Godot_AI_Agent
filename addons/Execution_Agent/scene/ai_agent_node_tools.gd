@@ -7,6 +7,9 @@ class_name AIAgentNodeTools
 var scene_helpers: AIAgentSceneHelpers
 var undo_redo: EditorUndoRedoManager
 
+const DEFAULT_NODE_TYPE_RESULT_LIMIT := 50
+const MAX_NODE_TYPE_RESULT_LIMIT := 100
+
 
 func _init(
 	p_scene_helpers: AIAgentSceneHelpers,
@@ -1323,3 +1326,301 @@ func _set_owner_recursive(
 				child,
 				new_owner
 			)
+
+
+# ==========================================
+# validate_node_type
+# ==========================================
+# Read-only pre-flight check for node-type
+# dependent operations such as create_node.
+# Answers from the actual ClassDB of the
+# running editor. No scene state is read or
+# modified.
+
+
+func validate_node_type_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_type"):
+
+		return {
+			"success": false,
+			"error": (
+				"validate_node_type requires node_type."
+			)
+		}
+
+	var node_type: String = (
+		str(data["node_type"]).strip_edges()
+	)
+
+	if node_type.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"validate_node_type requires a "
+				+ "non-empty node_type."
+			)
+		}
+
+	var type_exists: bool = (
+		ClassDB.class_exists(node_type)
+	)
+
+	# "Node" itself is a valid parent class, so
+	# any Node subclass (including Node) passes.
+	var is_node_class: bool = (
+		type_exists
+		and ClassDB.is_parent_class(
+			node_type,
+			"Node"
+		)
+	)
+
+	# Abstract base classes such as CanvasItem
+	# exist and inherit from Node but cannot be
+	# instantiated directly, so they are not
+	# valid targets for create_node.
+	var can_instantiate: bool = (
+		type_exists
+		and ClassDB.can_instantiate(node_type)
+	)
+
+	var parent_class: String = ""
+
+	if type_exists:
+
+		parent_class = str(
+			ClassDB.get_parent_class(node_type)
+		)
+
+	var is_valid: bool = (
+		type_exists
+		and is_node_class
+		and can_instantiate
+	)
+
+	var message: String
+
+	if not type_exists:
+
+		message = (
+			"'"
+			+ node_type
+			+ "' is not a registered Godot class."
+		)
+
+	elif not is_node_class:
+
+		message = (
+			"'"
+			+ node_type
+			+ "' exists but is not a Node class."
+		)
+
+	elif not can_instantiate:
+
+		message = (
+			"'"
+			+ node_type
+			+ "' is a Node class but cannot be "
+			+ "instantiated directly."
+		)
+
+	else:
+
+		message = (
+			"'"
+			+ node_type
+			+ "' is a valid, instantiable node type."
+		)
+
+	return {
+		"success": true,
+		"action": "validate_node_type",
+		"node_type": node_type,
+		"valid": is_valid,
+		"exists": type_exists,
+		"is_node_class": is_node_class,
+		"can_instantiate": can_instantiate,
+		"parent_class": parent_class,
+		"message": message
+	}
+
+
+# ==========================================
+# list_available_node_types
+# ==========================================
+# Bounded ClassDB discovery for native,
+# instantiable Node classes. This is read-only
+# and intentionally returns names only; callers
+# use validate_node_type for an exact candidate.
+
+
+func list_available_node_types_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var inherits_from := ""
+	var name_contains := ""
+	var limit := DEFAULT_NODE_TYPE_RESULT_LIMIT
+
+	if (
+		data.has("inherits_from")
+		and data["inherits_from"] != null
+	):
+
+		inherits_from = str(
+			data["inherits_from"]
+		).strip_edges()
+
+		if inherits_from.is_empty():
+
+			return {
+				"success": false,
+				"error": (
+					"list_available_node_types inherits_from "
+					+ "must be non-empty when provided."
+				)
+			}
+
+		if not ClassDB.class_exists(inherits_from):
+
+			return {
+				"success": false,
+				"error": (
+					"Invalid inherits_from filter: "
+					+ inherits_from
+					+ " is not a registered Godot class."
+				)
+			}
+
+		if not ClassDB.is_parent_class(
+			inherits_from,
+			"Node"
+		):
+
+			return {
+				"success": false,
+				"error": (
+					"Invalid inherits_from filter: "
+					+ inherits_from
+					+ " is not a Node class."
+				)
+			}
+
+	if (
+		data.has("name_contains")
+		and data["name_contains"] != null
+	):
+
+		name_contains = str(
+			data["name_contains"]
+		).strip_edges()
+
+		if name_contains.is_empty():
+
+			return {
+				"success": false,
+				"error": (
+					"list_available_node_types name_contains "
+					+ "must be non-empty when provided."
+				)
+			}
+
+	if (
+		data.has("limit")
+		and data["limit"] != null
+	):
+
+		var supplied_limit = data["limit"]
+
+		if (
+			typeof(supplied_limit) != TYPE_INT
+			and typeof(supplied_limit) != TYPE_FLOAT
+		):
+
+			return _node_type_limit_error()
+
+		limit = int(supplied_limit)
+
+		if (
+			float(supplied_limit) != float(limit)
+			or limit < 1
+			or limit > MAX_NODE_TYPE_RESULT_LIMIT
+		):
+
+			return _node_type_limit_error()
+
+	var matching_types: Array = []
+
+	for class_name_variant in ClassDB.get_class_list():
+
+		var candidate_name := str(class_name_variant)
+
+		if not ClassDB.is_parent_class(
+			candidate_name,
+			"Node"
+		):
+
+			continue
+
+		if not ClassDB.can_instantiate(candidate_name):
+
+			continue
+
+		if (
+			not inherits_from.is_empty()
+			and candidate_name != inherits_from
+			and not ClassDB.is_parent_class(
+				candidate_name,
+				inherits_from
+			)
+		):
+
+			continue
+
+		if (
+			not name_contains.is_empty()
+			and not candidate_name.to_lower().contains(
+				name_contains.to_lower()
+			)
+		):
+
+			continue
+
+		matching_types.append(candidate_name)
+
+	matching_types.sort()
+
+	var total_matches := matching_types.size()
+	var node_types: Array = []
+
+	for index in range(min(limit, total_matches)):
+		node_types.append(matching_types[index])
+
+	return {
+		"success": true,
+		"action": "list_available_node_types",
+		"inherits_from": inherits_from,
+		"name_contains": name_contains,
+		"limit": limit,
+		"total_matches": total_matches,
+		"truncated": total_matches > limit,
+		"node_types": node_types
+	}
+
+
+func _node_type_limit_error() -> Dictionary:
+
+	return {
+		"success": false,
+		"error": (
+			"list_available_node_types limit must be an "
+			+ "integer from 1 to "
+			+ str(MAX_NODE_TYPE_RESULT_LIMIT)
+			+ "."
+		)
+	}

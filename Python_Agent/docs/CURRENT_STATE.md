@@ -395,6 +395,137 @@ being guessed.
 
 ---
 
+# Feature: Tool Expansion V2 - validate_node_type
+
+The first Tool Expansion V2 tool adds a read-only, Godot-side
+pre-flight check for node type names.
+
+## Behavior
+
+- Decision:
+  `{"action": "validate_node_type", "reason": "...", "node_type": "..."}`.
+- The Godot bridge answers from the running editor's `ClassDB`
+  (`addons/Execution_Agent/scene/ai_agent_node_tools.gd`,
+  `validate_node_type_from_request()`). The type is `valid` only
+  if it exists as a registered class, inherits from `Node`, and
+  can be instantiated directly; abstract bases such as
+  `CanvasItem` and non-Node classes such as `Resource` are
+  reported as not valid for node creation.
+- Result: `success`, `action`, `node_type` (trimmed), `valid`,
+  `exists`, `is_node_class`, `can_instantiate`, `parent_class`,
+  and `message`. Read-only: no scene access, no undo/redo
+  involvement.
+- Registered in `agent/registry.py` as read-only and batchable;
+  routed at `/validate_node_type` through the standard bridge
+  router.
+- Verified against live Godot 4.7.2 headless (8/8 cases passed:
+  valid type, abstract base, non-Node class, unknown class,
+  whitespace-only, missing key, `Node` itself, whitespace
+  trimming).
+
+## Not covered
+
+- Script-defined (`class_name`) custom types: `ClassDB` covers
+  native classes only. Script-class validation is future work.
+
+---
+
+# Advanced Tool: `list_available_node_types`
+
+`list_available_node_types` is a read-only ClassDB discovery tool for
+finding native, instantiable Godot `Node` classes before selecting an
+exact candidate for `validate_node_type` and, eventually, `create_node`.
+
+## Contract
+
+- Optional filters: `inherits_from` (a registered `Node` class) and
+  case-insensitive `name_contains`.
+- Optional `limit`: 1ΓÇô100; the default is 50. Unfiltered requests are
+  allowed but are still bounded.
+- Results contain only sorted class names that inherit from `Node` and
+  can be instantiated. They include `total_matches` and `truncated`, so
+  a bounded result is never presented as an exhaustive list.
+- Invalid or non-Node `inherits_from`, blank supplied filters, and an
+  invalid limit return the standard structured failure form. No match is
+  a successful result with `total_matches: 0` and an empty `node_types`
+  list.
+- It is registered as read-only and batchable, matching the existing
+  policy for inspection actions. It has no scene, undo/redo, telemetry,
+  or interrupted-batch-boundary side effects.
+
+## Deliberate boundary
+
+This is candidate discovery, not an arbitrary ClassDB metadata dump.
+It exposes no methods, signals, properties, documentation, or parent
+metadata. `validate_node_type` remains the exact pre-flight check for a
+chosen candidate and `create_node` remains the only creation operation.
+
+---
+
+# Feature: Tooling V3 ΓÇö `get_node_property` Action
+
+A new `get_node_property` action reads a single, already-known
+property of a single node, avoiding the overhead of re-requesting the
+node's entire property list (`get_node_properties`) just to inspect one
+value. It is the single-value counterpart to the multi-value inspector
+and is read-only, batchable, and side-effect-free.
+
+## Scope
+
+- Required fields: `node_path` (str), `property_name` (str).
+- Both must be non-empty after whitespace stripping; blank strings are
+  rejected client-side before the bridge is called.
+- `node_path` follows the same editor-relative conventions as
+  `get_node_properties` (`"."` = the edited scene root).
+
+## Provider contract
+
+- Provider: Godot bridge
+  (`agent/scene_tools.py` ΓåÆ `tools/scene_tools.py`
+  ΓåÆ `AIAgentPropertyTools.get_node_property_from_request`).
+- Success returns the resolved node name, node type, property type /
+  type id, `editable` flag, and the property value serialized via
+  `AIAgentVariantSerializer` into a JSON-compatible structure.
+- Failures propagate the standard structured-failure form
+  (`{"success": false, "error": "..."}`): node not found, unsupported
+  property, and Python-side validation
+  rejections. A bridge failure is returned to the agent unchanged (no
+  exception wrapping, no partial execution).
+
+## Implementation summary
+
+- `agent/schemas.py`: `GetNodePropertyAction` (reason, node_path,
+  property_name) added to the `AgentDecision` union and the
+  `BatchableAction` union.
+- `agent/godot_agent.py`: `ACTION_REQUIREMENTS`
+  (`"get_node_property": ("node_path", "property_name")`); dispatch
+  case routed to `scene_tools.get_node_property`; documented as item #5
+  in the system-prompt action list (read-only).
+- `agent/registry.py`: registered as read-only, batchable, routed at
+  `/get_node_property` through the standard bridge router.
+- `tools/scene_tools.py`: `get_node_property` endpoint.
+- `addons/Execution_Agent/scene/ai_agent_property_tools.gd`:
+  `get_node_property_from_request` Godot-side handler.
+
+## Verification
+
+- 8 new Python contract tests (validation, blank-field rejection,
+  batch membership, success/failure passthrough).
+- Verified against live Godot 4.7.2 headless (8/8 cases passed:
+  read position of named node, read property of root node,
+  nonexistent property, nonexistent node, missing `node_path`,
+  missing `property_name`, blank `node_path`, blank `property_name`).
+
+## Not covered
+
+- No change to `get_node_properties` semantics; the two actions remain
+  distinct. `get_node_property` additionally supports the special,
+  scene-tree-visible `Node.name` attribute as a read-only value because
+  Godot omits it from the editor-property enumeration. Node renames still
+  use the dedicated undoable `rename_node` action.
+
+---
+
 # Current System Components
 
 ## Python Agent

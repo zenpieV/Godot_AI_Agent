@@ -32,10 +32,13 @@ from agent.schemas import (
     DuplicateNodeAction,
     FindNodesAction,
     GetNodePropertiesAction,
+    GetNodePropertyAction,
     GetSceneTreeAction,
+    ListAvailableNodeTypesAction,
     RenameNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
+    ValidateNodeTypeAction,
 )
 from tools import scene_tools
 
@@ -49,6 +52,9 @@ EXECUTABLE_ACTIONS = {
     "get_scene_tree",
     "find_nodes",
     "get_node_properties",
+    "get_node_property",
+    "validate_node_type",
+    "list_available_node_types",
     "describe_current_scene",
     "create_node",
     "rename_node",
@@ -169,12 +175,22 @@ def test_registry_entries_have_complete_facts():
 
 
 def test_registry_required_fields_match_previous_behavior():
-    """Registry required fields equal the old ACTION_REQUIREMENTS."""
+    """Registry required fields preserve the legacy mapping."""
     registry_fields = {
         name: spec.required_fields
         for name, spec in ACTION_REGISTRY.items()
     }
-    assert registry_fields == PREVIOUS_ACTION_REQUIREMENTS
+    # The 13 pre-existing actions must keep their exact legacy
+    # ACTION_REQUIREMENTS mapping.
+    for name, fields in PREVIOUS_ACTION_REQUIREMENTS.items():
+        assert registry_fields[name] == fields
+    # Tool Expansion V2 addition.
+    assert registry_fields["validate_node_type"] == ("node_type",)
+    assert registry_fields["get_node_property"] == (
+        "node_path",
+        "property_name",
+    )
+    assert registry_fields["list_available_node_types"] == ()
 
 
 def test_registry_schemas_match_batchable_union():
@@ -226,6 +242,62 @@ def test_read_only_and_control_not_classified_as_mutations():
         assert ACTION_REGISTRY[name].is_mutation is False
     for name in CONTROL_ACTIONS:
         assert ACTION_REGISTRY[name].is_mutation is False
+
+
+def test_validate_node_type_is_read_only_and_never_blocked():
+    """validate_node_type is read-only and immune to the boundary."""
+    spec = ACTION_REGISTRY["validate_node_type"]
+    assert spec.is_mutation is False
+    assert "validate_node_type" not in boundary._MUTATION_TARGET_KEYS
+
+    decision = ValidateNodeTypeAction(
+        reason="r", action="validate_node_type", node_type="Node2D"
+    )
+
+    # Even with a blocked skipped rename recorded, a read-only
+    # validate_node_type decision must never be blocked.
+    blocked_actions = [
+        {
+            "fingerprint": (
+                "rename_node",
+                (("node_path", "Player"), ("new_name", "X")),
+            ),
+            "mutation_target": (
+                "rename_node",
+                (("node_path", "Player"),),
+            ),
+            "batch_index": 2,
+            "batch_size": 3,
+            "action": "rename_node",
+        }
+    ]
+
+    (
+        is_blocked,
+        reason,
+        matches,
+    ) = boundary.check_decision_blocked(decision, blocked_actions)
+
+    assert is_blocked is False
+    assert reason == ""
+    assert matches == []
+
+
+def test_get_node_property_is_read_only_and_not_in_boundary():
+    """get_node_property is a read-only inspection action."""
+    spec = ACTION_REGISTRY["get_node_property"]
+    assert spec.is_mutation is False
+    assert "get_node_property" not in boundary._MUTATION_TARGET_KEYS
+    assert "get_node_property" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_list_available_node_types_is_read_only_and_not_in_boundary():
+    """ClassDB discovery is a batchable inspection action."""
+    spec = ACTION_REGISTRY["list_available_node_types"]
+    assert spec.is_mutation is False
+    assert "list_available_node_types" not in boundary._MUTATION_TARGET_KEYS
+    assert "list_available_node_types" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
 
 def test_unknown_action_returns_structured_failure(agent_module):
     result = agent_module._execute_single_action(
@@ -291,6 +363,44 @@ DISPATCH_CASES = [
         ),
         "get_node_properties",
         {"node_path": "Player"},
+    ),
+    (
+        "get_node_property",
+        GetNodePropertyAction(
+            reason="r",
+            action="get_node_property",
+            node_path="Player",
+            property_name="position",
+        ),
+        "get_node_property",
+        {"node_path": "Player", "property_name": "position"},
+    ),
+    (
+        "get_node_property-name",
+        GetNodePropertyAction(
+            reason="r",
+            action="get_node_property",
+            node_path="Player",
+            property_name="name",
+        ),
+        "get_node_property",
+        {"node_path": "Player", "property_name": "name"},
+    ),
+    (
+        "list_available_node_types",
+        ListAvailableNodeTypesAction(
+            reason="r",
+            action="list_available_node_types",
+            inherits_from="Node2D",
+            name_contains="Body",
+            limit=10,
+        ),
+        "list_available_node_types",
+        {
+            "inherits_from": "Node2D",
+            "name_contains": "Body",
+            "limit": 10,
+        },
     ),
     (
         "create_node",
@@ -360,6 +470,16 @@ DISPATCH_CASES = [
         ),
         "set_properties",
         {"node_path": "Player", "properties": {"visible": True}},
+    ),
+    (
+        "validate_node_type",
+        ValidateNodeTypeAction(
+            reason="r",
+            action="validate_node_type",
+            node_type="Node2D",
+        ),
+        "validate_node_type",
+        {"node_type": "Node2D"},
     ),
 ]
 

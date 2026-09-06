@@ -151,6 +151,8 @@ distinct and documented in `TOOL_PROTOCOL.md`.
 get_scene_tree
 find_nodes
 get_node_properties
+get_node_property
+validate_node_type
 ```
 
 ### Mutation

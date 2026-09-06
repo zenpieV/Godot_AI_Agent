@@ -46,10 +46,13 @@ from agent.schemas import (
     FinalAnswerAction,
     FindNodesAction,
     GetNodePropertiesAction,
+    GetNodePropertyAction,
     GetSceneTreeAction,
+    ListAvailableNodeTypesAction,
     RenameNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
+    ValidateNodeTypeAction,
 )
 
 
@@ -103,6 +106,39 @@ def _execute_get_node_properties(decision):
         node_path=(
             decision.node_path
         )
+    )
+
+
+def _execute_get_node_property(decision):
+    return scene_tools.get_node_property(
+        node_path=(
+            decision.node_path
+        ),
+        property_name=(
+            decision.property_name
+        ),
+    )
+
+
+def _execute_validate_node_type(decision):
+    return scene_tools.validate_node_type(
+        node_type=(
+            decision.node_type
+        )
+    )
+
+
+def _execute_list_available_node_types(decision):
+    return scene_tools.list_available_node_types(
+        inherits_from=(
+            decision.inherits_from
+        ),
+        name_contains=(
+            decision.name_contains
+        ),
+        limit=(
+            decision.limit
+        ),
     )
 
 
@@ -217,6 +253,30 @@ _ACTION_SPECS = (
         required_fields=("node_path",),
         is_mutation=False,
         handler=_execute_get_node_properties,
+    ),
+    ActionSpec(
+        name="get_node_property",
+        schema=GetNodePropertyAction,
+        required_fields=(
+            "node_path",
+            "property_name",
+        ),
+        is_mutation=False,
+        handler=_execute_get_node_property,
+    ),
+    ActionSpec(
+        name="validate_node_type",
+        schema=ValidateNodeTypeAction,
+        required_fields=("node_type",),
+        is_mutation=False,
+        handler=_execute_validate_node_type,
+    ),
+    ActionSpec(
+        name="list_available_node_types",
+        schema=ListAvailableNodeTypesAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_list_available_node_types,
     ),
     ActionSpec(
         name="describe_current_scene",

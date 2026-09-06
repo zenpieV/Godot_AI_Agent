@@ -57,6 +57,37 @@ class GetNodePropertiesAction(BaseAction):
     node_path: str
 
 
+class GetNodePropertyAction(BaseAction):
+
+    action: Literal["get_node_property"]
+
+    node_path: str
+
+    property_name: str
+
+
+class ValidateNodeTypeAction(BaseAction):
+
+    action: Literal["validate_node_type"]
+
+    node_type: str
+
+
+class ListAvailableNodeTypesAction(BaseAction):
+
+    action: Literal["list_available_node_types"]
+
+    inherits_from: Optional[str] = None
+
+    name_contains: Optional[str] = None
+
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+    )
+
+
 # ==========================================
 # Scene mutation actions
 # ==========================================
@@ -150,6 +181,9 @@ BatchableAction = Annotated[
         GetSceneTreeAction,
         FindNodesAction,
         GetNodePropertiesAction,
+        GetNodePropertyAction,
+        ValidateNodeTypeAction,
+        ListAvailableNodeTypesAction,
         CreateNodeAction,
         RenameNodeAction,
         DeleteNodeAction,
@@ -214,6 +248,9 @@ AgentDecision = Annotated[
         GetSceneTreeAction,
         FindNodesAction,
         GetNodePropertiesAction,
+        GetNodePropertyAction,
+        ValidateNodeTypeAction,
+        ListAvailableNodeTypesAction,
         CreateNodeAction,
         RenameNodeAction,
         DeleteNodeAction,
