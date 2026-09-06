@@ -33,17 +33,7 @@ from agent.telemetry import (
     safe_error_message,
 )
 
-from tools.scene_tools import (
-    get_scene_tree,
-    find_nodes,
-    get_node_properties,
-    create_node,
-    rename_node,
-    delete_node,
-    reparent_node,
-    duplicate_node,
-    set_properties,
-)
+from agent.registry import ACTION_REGISTRY
 
 
 # ==========================================
@@ -87,62 +77,11 @@ class SessionIdFilter(logging.Filter):
 # ==========================================
 # 1. Action requirements
 # ==========================================
-
-ACTION_REQUIREMENTS = {
-
-    "get_scene_tree": (),
-
-    "find_nodes": (),
-
-    "get_node_properties": (
-        "node_path",
-    ),
-
-    "create_node": (
-        "parent_path",
-        "node_type",
-        "node_name",
-    ),
-
-    "rename_node": (
-        "node_path",
-        "new_name",
-    ),
-
-    "delete_node": (
-        "node_path",
-    ),
-
-    "reparent_node": (
-        "node_path",
-        "new_parent_path",
-    ),
-
-    "duplicate_node": (
-        "node_path",
-        "new_parent_path",
-        "new_name",
-    ),
-
-    "set_properties": (
-        "node_path",
-        "properties_json",
-    ),
-
-    "describe_current_scene": (),
-
-    "batch": (
-        "actions",
-    ),
-
-    "final_answer": (
-        "final_answer",
-    ),
-
-    "exit_session": (
-        "exit_summary",
-    ),
-}
+#
+# Required fields per action now live in agent/registry.py
+# (ActionSpec.required_fields), which is the single source of
+# truth shared by validation and dispatch. See
+# tests/test_registry.py for the consistency guarantees.
 
 
 from agent.boundary import (
@@ -158,9 +97,12 @@ def get_missing_required_fields(
 ) -> list[str]:
 
     required_fields = (
-        ACTION_REQUIREMENTS.get(
+        ACTION_REGISTRY[
             decision.action
-        )
+        ].required_fields
+        if decision.action
+        in ACTION_REGISTRY
+        else None
     )
 
     if required_fields is None:
@@ -202,7 +144,7 @@ def validate_agent_action(
 
     if (
         decision.action
-        not in ACTION_REQUIREMENTS
+        not in ACTION_REGISTRY
     ):
 
         return (
@@ -1048,14 +990,9 @@ def ask_model(
 # ==========================================
 # 4. Temporary prototype tools
 # ==========================================
-
-def describe_current_scene():
-
-    return (
-        "Vision is not connected yet. "
-        "The current scene screenshot "
-        "cannot yet be analyzed."
-    )
+#
+# describe_current_scene is a temporary prototype action with no
+# Godot endpoint; its handler lives in agent/registry.py.
 
 
 # ==========================================
@@ -1113,164 +1050,36 @@ def execute_single_action(
 def _execute_single_action(
     decision,
 ):
+    """
+    Dispatch a validated, non-control action through the
+    agent/registry.py action registry.
+
+    Control actions (batch, final_answer, exit_session) never
+    reach this function: final_answer and exit_session are
+    intercepted in the main loop, and batch decisions are
+    orchestrated by execute_batch_actions().
+    """
+
+    spec = ACTION_REGISTRY.get(
+        decision.action
+    )
 
     if (
-        decision.action
-        == "get_scene_tree"
+        spec is None
+        or spec.handler is None
     ):
 
-        return get_scene_tree()
-
-    if (
-        decision.action
-        == "find_nodes"
-    ):
-
-        name_match = (
-            decision.name_match
-            or "exact"
-        )
-
-        include_root = (
-            decision.include_root
-            if decision.include_root is not None
-            else False
-        )
-
-        return find_nodes(
-            node_name=(
-                decision.node_name
+        return {
+            "success": False,
+            "error": (
+                "Invalid agent action: "
+                + str(
+                    decision.action
+                )
             ),
-            node_type=(
-                decision.node_type
-            ),
-            parent_path=(
-                decision.parent_path
-            ),
-            name_match=name_match,
-            include_root=include_root,
-        )
+        }
 
-    if (
-        decision.action
-        == "get_node_properties"
-    ):
-
-        return get_node_properties(
-            node_path=(
-                decision.node_path
-            )
-        )
-
-    if (
-        decision.action
-        == "set_properties"
-    ):
-
-        parsed_properties = (
-            json.loads(
-                decision.properties_json
-            )
-        )
-
-        return set_properties(
-            node_path=(
-                decision.node_path
-            ),
-            properties=(
-                parsed_properties
-            ),
-        )
-
-    if (
-        decision.action
-        == "create_node"
-    ):
-
-        return create_node(
-            parent_path=(
-                decision.parent_path
-            ),
-            node_type=(
-                decision.node_type
-            ),
-            node_name=(
-                decision.node_name
-            ),
-        )
-
-    if (
-        decision.action
-        == "rename_node"
-    ):
-
-        return rename_node(
-            node_path=(
-                decision.node_path
-            ),
-            new_name=(
-                decision.new_name
-            ),
-        )
-
-    if (
-        decision.action
-        == "delete_node"
-    ):
-
-        return delete_node(
-            node_path=(
-                decision.node_path
-            )
-        )
-
-    if (
-        decision.action
-        == "reparent_node"
-    ):
-
-        return reparent_node(
-            node_path=(
-                decision.node_path
-            ),
-            new_parent_path=(
-                decision.new_parent_path
-            ),
-        )
-
-    if (
-        decision.action
-        == "duplicate_node"
-    ):
-
-        return duplicate_node(
-            node_path=(
-                decision.node_path
-            ),
-            new_parent_path=(
-                decision.new_parent_path
-            ),
-            new_name=(
-                decision.new_name
-            ),
-        )
-
-    if (
-        decision.action
-        == "describe_current_scene"
-    ):
-
-        return describe_current_scene()
-
-    return {
-        "success": False,
-        "error": (
-            "Invalid agent action: "
-            + str(
-                decision.action
-            )
-        ),
-    }
+    return spec.handler(decision)
 
 
 def execute_batch_actions(
