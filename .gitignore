@@ -1,0 +1,62 @@
+# ============================================================
+# Python
+# ============================================================
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caches / compiled files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment / secrets
+.env
+.env.*
+
+# Runtime logs
+agent.log
+logs/
+
+# Personal scratchpad
+Python_Agent/docs/clipboard.md
+
+
+# ============================================================
+# Godot
+# ============================================================
+
+# Godot editor metadata
+.godot/
+
+# Imported/generated resources
+*.import
+
+# Godot export/build output
+/export/
+/build/
+
+# Optional Godot-generated directories
+/.godot/
+
+
+# ============================================================
+# OS / editor junk
+# ============================================================
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/

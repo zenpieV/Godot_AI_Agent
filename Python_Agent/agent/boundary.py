@@ -1,0 +1,283 @@
+"""
+Batch execution boundary enforcement.
+
+When a batch stops early due to a failed action, skipped actions are
+recorded as "blocked" so that Python (not the model) prevents them
+from being automatically resumed in subsequent reasoning steps.
+
+Before any non-final decision is executed, the orchestrator calls
+`check_decision_blocked()`. If a proposed action matches a blocked
+skipped action, Python refuses to execute it, logs the rejection,
+and returns a tool-result-shaped dict explaining why.
+
+This module is intentionally free of any module-level side effects
+(no logging setup, no user input, no Godot calls) so it can be
+imported and tested without triggering the agent loop.
+"""
+
+
+_BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
+    "rename_node": ("node_path", "new_name"),
+    "duplicate_node": ("node_path", "new_parent_path", "new_name"),
+    "create_node": ("parent_path", "node_type", "node_name"),
+    "delete_node": ("node_path",),
+    "reparent_node": ("node_path", "new_parent_path"),
+    "set_properties": ("node_path", "properties_json"),
+}
+
+# Fields identifying the RESOURCE being mutated (the "target"),
+# independent of the desired resulting state.
+#
+# This is the key to preventing parameter-change bypass: a skipped
+# rename of "Player" must block ANY future rename of "Player",
+# regardless of what new_name the model proposes.
+#
+# For create_node there is no pre-existing resource, so the target
+# is empty - exact fingerprint equivalence is sufficient.
+
+_MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
+    "rename_node": ("node_path",),
+    "duplicate_node": ("node_path",),
+    "create_node": (),
+    "delete_node": ("node_path",),
+    "reparent_node": ("node_path",),
+    "set_properties": ("node_path",),
+}
+
+
+def extract_mutation_target(
+    action,
+) -> tuple[str, tuple[tuple[str, object], ...]]:
+    """
+    Extract the identity of the resource being mutated by this action,
+    independent of the desired resulting state.
+
+    For example, rename_node("Player", "X") and rename_node("Player", "Y")
+    both have the same mutation target: ("Player",). This allows
+    enforcement to block automatic resumption of a skipped mutation
+    even when the model changes non-target parameters to evade an
+    exact fingerprint match.
+
+    Read-only / inspection actions return a target that will never
+    match a blocked mutation target.
+    """
+
+    action_type = getattr(action, "action", None)
+
+    if action_type not in _MUTATION_TARGET_KEYS:
+        return (str(action_type), ())
+
+    keys = _MUTATION_TARGET_KEYS[action_type]
+
+    if not keys:
+        return (str(action_type), ())
+
+    field_values = []
+    for key in keys:
+        field_values.append(
+            (key, getattr(action, key, None))
+        )
+
+    return (str(action_type), tuple(field_values))
+
+
+def compute_action_fingerprint(
+    action,
+) -> tuple[str, tuple[tuple[str, object], ...]]:
+    """
+    Extract the minimal identity of a mutation action used for
+    batch-resume equivalence checking. Returns a tuple of
+    (action_type, sorted_key_fields) that can be compared for exact
+    equivalence against a blocked skipped action.
+
+    Read-only / inspection actions are not part of the equivalence
+    system: they return a fingerprint that will never match a blocked
+    mutation action.
+    """
+
+    action_type = getattr(
+        action,
+        "action",
+        None,
+    )
+
+    if (
+        action_type
+        not in _BATCH_ACTION_EQUIVALENCE_KEYS
+    ):
+        return (
+            str(action_type),
+            (),
+        )
+
+    keys = _BATCH_ACTION_EQUIVALENCE_KEYS[
+        action_type
+    ]
+
+    field_values = []
+    for key in keys:
+        field_values.append(
+            (
+                key,
+                getattr(
+                    action,
+                    key,
+                    None,
+                ),
+            )
+        )
+
+    return (
+        str(action_type),
+        tuple(field_values),
+    )
+
+
+def is_action_blocked(
+    action,
+    blocked_actions: list[dict],
+) -> tuple[bool, dict]:
+    """
+    Return (True, matching_blocked_entry) if the given action is
+    equivalent to one of the blocked skipped actions from an
+    interrupted batch. Otherwise return (False, {}).
+
+    Two checks are performed:
+
+    1. Exact fingerprint match: same action type and same execution
+       fields (e.g. node_path + new_name for rename_node). This blocks
+       the literal resumption of the skipped action.
+
+    2. Mutation target match: same action type and same mutation target
+       resource (e.g. node_path for rename_node). This blocks parameter-
+       change bypasses where the model changes new_name (or other
+       non-target fields) to evade the exact fingerprint check while
+       still targeting the same skipped resource.
+
+    Read-only / inspection actions are never blocked.
+    """
+
+    fingerprint = compute_action_fingerprint(action)
+    mutation_target = extract_mutation_target(action)
+
+    for blocked_entry in blocked_actions:
+        if blocked_entry.get("fingerprint") == fingerprint:
+            return (True, blocked_entry)
+
+        blocked_target = blocked_entry.get("mutation_target")
+        if (
+            blocked_target is not None
+            and blocked_target == mutation_target
+            and blocked_target != (str(mutation_target[0]), ())
+        ):
+            return (True, blocked_entry)
+
+    return (False, {})
+
+
+def check_decision_blocked(
+    decision,
+    blocked_actions: list[dict],
+) -> tuple[bool, str, list[dict]]:
+    """
+    Check a proposed decision against the blocked skipped actions.
+
+    Handles both single-action decisions and batch decisions.
+    For a batch, every item is checked; if any item matches a
+    blocked action, the whole batch is rejected.
+
+    Returns:
+        (blocked, reason, matches)
+    """
+
+    if not blocked_actions:
+        return (
+            False,
+            "",
+            [],
+        )
+
+    if decision.action == "batch":
+        matches = []
+        for (
+            sub_action
+        ) in decision.actions:
+            (
+                blocked,
+                entry,
+            ) = is_action_blocked(
+                sub_action,
+                blocked_actions,
+            )
+            if blocked:
+                matches.append(
+                    {
+                        "action": (
+                            sub_action.action
+                        ),
+                        "decision_index": (
+                            getattr(
+                                sub_action,
+                                "action_index",
+                                None,
+                            )
+                        ),
+                        "blocked_entry": entry,
+                    }
+                )
+
+        if matches:
+            match_descriptions = []
+            for m in matches:
+                blocked = m[
+                    "blocked_entry"
+                ]
+                match_descriptions.append(
+                    f"{m['action']} (blocked: skipped batch action {blocked.get('batch_index')}/{blocked.get('batch_size')})"
+                )
+            reason = (
+                "Blocked automatic resume of skipped batch action(s): "
+                + "; ".join(
+                    match_descriptions
+                )
+            )
+            return (
+                True,
+                reason,
+                matches,
+            )
+
+        return (
+            False,
+            "",
+            [],
+        )
+
+    blocked, entry = is_action_blocked(
+        decision,
+        blocked_actions,
+    )
+    if blocked:
+        reason = (
+            f"Blocked automatic resume of skipped batch action "
+            f"{entry.get('batch_index')}/{entry.get('batch_size')} "
+            f"({entry.get('action')})."
+        )
+        return (
+            True,
+            reason,
+            [
+                {
+                    "action": (
+                        decision.action
+                    ),
+                    "blocked_entry": entry,
+                }
+            ],
+        )
+
+    return (
+        False,
+        "",
+        [],
+    )
