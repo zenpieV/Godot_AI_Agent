@@ -26,8 +26,8 @@ For verified historical behavior and test results, see:
 
 For architectural rules, see:
 
-- `.agentrules/rules/01-DEVELOPMENT_RULES.md`
-- `.agentrules/rules/02-PROJECT_ARCHITECTURE.md`
+- `.agentrules/01-DEVELOPMENT_RULES.md`
+- `.agentrules/02-PROJECT_ARCHITECTURE.md`
 
 ---
 
@@ -632,6 +632,349 @@ The new hierarchy may need to be inspected if another operation depends on the n
 
 ---
 
+# Tool: get_node_properties
+
+## Purpose
+
+Returns the editable properties of an existing node in the currently
+edited scene.
+
+This is a read-only inspection tool; it never mutates the scene.
+
+---
+
+## Required Input
+
+    node_path
+
+Example:
+
+    {
+      "node_path": "CharacterBody2D/TestSprite"
+    }
+
+---
+
+## Successful Result
+
+Example shape:
+
+    {
+      "success": true,
+      "action": "get_node_properties",
+      "node_path": "CharacterBody2D/TestSprite",
+      "node_name": "TestSprite",
+      "node_type": "Sprite2D",
+      "property_count": 2,
+      "properties": {
+        "position": { "type": "Vector2", "x": 100.0, "y": 200.0 },
+        "visible": true
+      }
+    }
+
+Property values are serialized by the Godot bridge into
+JSON-compatible structures.
+
+---
+
+## Node Not Found
+
+A missing node returns a structured failure of the standard form:
+
+    {
+      "success": false,
+      "error": "..."
+    }
+
+Recovery: locate the node with `find_nodes`, then retry with the
+returned exact path.
+
+---
+
+# Tool: delete_node
+
+## Purpose
+
+Deletes an existing node from the currently edited scene.
+
+The Godot editor handles this as an undoable
+`EditorUndoRedoManager` action.
+
+---
+
+## Required Input
+
+    node_path
+
+Example:
+
+    {
+      "node_path": "CharacterBody2D/TestEnemy"
+    }
+
+---
+
+## Successful Result
+
+Example:
+
+    {
+      "success": true,
+      "action": "delete_node",
+      "message": "Node deleted successfully in the Godot editor.",
+      "node_path": "CharacterBody2D/TestEnemy",
+      "undoable": true
+    }
+
+After deletion, the path is no longer valid. Do not reuse a deleted
+node's path without re-inspecting the scene.
+
+---
+
+## Validation Failure
+
+A missing `node_path` or an unresolvable node returns a structured
+failure of the standard form:
+
+    {
+      "success": false,
+      "error": "..."
+    }
+
+Recovery: locate the node with `find_nodes`, obtain the exact path,
+and retry.
+
+---
+
+# Tool: duplicate_node
+
+## Purpose
+
+Duplicates an existing node including its subtree, placing the copy
+under a new parent with the specified name.
+
+The operation is editor-native and undoable. Ownership of the entire
+duplicated subtree is set to the edited scene root so the copy is
+saved with the scene.
+
+---
+
+## Required Input
+
+    node_path
+    new_parent_path
+    new_name
+
+Example:
+
+    {
+      "node_path": "CharacterBody2D/PersistentEnemy",
+      "new_parent_path": "CharacterBody2D",
+      "new_name": "EnemyCopy"
+    }
+
+---
+
+## Validation Rules
+
+- Duplicating the edited scene root is not supported.
+- A node cannot be duplicated under itself or one of its own
+  descendants.
+- The new parent must exist and be resolvable.
+
+Failure returns the standard structured form, e.g.:
+
+    {
+      "success": false,
+      "error": "New parent node not found: CharacterBody2D/MissingParent"
+    }
+
+---
+
+## Successful Result
+
+Example:
+
+    {
+      "success": true,
+      "action": "duplicate_node",
+      "message": "Node duplicated successfully in the Godot editor.",
+      "node_name": "EnemyCopy",
+      "actual_node_name": "EnemyCopy",
+      "node_path_before": "CharacterBody2D/PersistentEnemy",
+      "new_parent_path": "CharacterBody2D",
+      "node_path_after": "CharacterBody2D/EnemyCopy",
+      "name_collision_detected": false,
+      "verified_exists": true,
+      "verified_owned": true,
+      "undoable": true
+    }
+
+Important:
+
+The editor silently renames the new child if a sibling already has the
+same name. `actual_node_name`, `node_path_after`, and
+`name_collision_detected` report the authoritative result. Always
+prefer `node_path_after` for subsequent operations.
+
+---
+
+# Tool: set_properties
+
+## Purpose
+
+Sets one or more editable properties on a node in the currently
+edited Godot scene.
+
+The Godot editor bridge validates all requested properties before
+applying them as one undoable operation.
+
+---
+
+## Required Input
+
+The decision carries a JSON string of property names to values:
+
+    node_path
+    properties_json
+
+Example:
+
+    {
+      "node_path": "CharacterBody2D/TestSprite",
+      "properties_json": "{\"position\": {\"type\": \"Vector2\", \"x\": 100, \"y\": 200}, \"visible\": true}"
+    }
+
+Python parses `properties_json` before dispatch; malformed JSON or
+invalid values are rejected before any Godot call.
+
+---
+
+## Successful Result
+
+Example:
+
+    {
+      "success": true,
+      "action": "set_properties",
+      "message": "Properties set successfully in the Godot editor.",
+      "node_path": "CharacterBody2D/TestSprite",
+      "properties": {
+        "position": { "type": "Vector2", "x": 100.0, "y": 200.0 },
+        "visible": true
+      },
+      "undoable": true
+    }
+
+The returned `properties` reflect what the bridge applied.
+
+---
+
+## Validation Failure
+
+A missing or empty `node_path` / property set, or a property that
+fails bridge-side validation, returns a structured failure of the
+standard form:
+
+    {
+      "success": false,
+      "error": "..."
+    }
+
+Recovery: inspect the node with `get_node_properties`, then retry with
+valid property values.
+
+---
+
+# Tool: batch
+
+## Purpose
+
+Allows the model to propose a short, ordered sequence of actions that
+execute in one host round-trip instead of one model call per action.
+
+---
+
+## Rules
+
+- `actions` must contain 1 to `MAX_BATCH_SIZE` (currently 5) items;
+  a larger batch is rejected outright, never silently truncated.
+- Batch items reuse the exact same per-action schemas as standalone
+  decisions and are validated identically.
+- `final_answer`, `exit_session`, and nested `batch` actions are not
+  valid batch items.
+- Execution is sequential with a stop-on-first-failure boundary.
+- If a batch stops early, skipped actions are recorded by
+  `agent/boundary.py`. Python then blocks any later decision that
+  attempts to resume a skipped mutation, including same-target
+  parameter changes. Read-only recovery actions remain allowed.
+
+---
+
+## Decision Example
+
+    {
+      "action": "batch",
+      "reason": "Create the node, then verify it exists.",
+      "actions": [
+        {
+          "action": "create_node",
+          "reason": "Create the test node.",
+          "parent_path": ".",
+          "node_type": "Node2D",
+          "node_name": "BatchProbe"
+        },
+        {
+          "action": "find_nodes",
+          "reason": "Verify the created node.",
+          "node_name": "BatchProbe"
+        }
+      ]
+    }
+
+---
+
+## Successful Result
+
+Example:
+
+    {
+      "action": "batch",
+      "success": true,
+      "batch_size": 2,
+      "succeeded_count": 2,
+      "failed_count": 0,
+      "stopped_early": false,
+      "stopped_at_index": null,
+      "results": [ ...per-item tool results... ],
+      "message": "Batch completed: 2/2 action(s) succeeded."
+    }
+
+---
+
+## Early Stop
+
+When an item fails, execution stops at that item and remaining items
+are skipped:
+
+    {
+      "action": "batch",
+      "success": false,
+      "batch_size": 3,
+      "succeeded_count": 1,
+      "failed_count": 1,
+      "stopped_early": true,
+      "stopped_at_index": 2,
+      "results": [ ...including skipped items flagged with "skipped": true... ],
+      "message": "Batch stopped at action 2/3 after a failure; 1 action(s) were skipped. ..."
+    }
+
+Skipped actions must not be automatically resumed. Attempting to
+resume one is rejected by Python before any Godot call, and the
+rejection is returned as a tool-result-shaped observation.
+
+---
+
 # Tool: final_answer
 
 ## Purpose
@@ -735,6 +1078,8 @@ The observed decision structure includes fields such as:
     new_name
     new_parent_path
     properties_json
+    actions
+    exit_summary
 
 Not every field is relevant to every action.
 
@@ -878,13 +1223,13 @@ Whenever Godot returns an exact path, prefer that path.
 
 # Future Tool Expansion
 
+Implemented tools are documented in the `# Tool:` sections above.
+`get_node_properties`, `delete_node`, `duplicate_node`, and
+`set_properties` are no longer future work.
+
 Future tools may include:
 
 - `inspect_node`
-- `get_node_properties`
-- `set_node_property`
-- `delete_node`
-- `duplicate_node`
 - `attach_script`
 - `inspect_script`
 - `create_scene`

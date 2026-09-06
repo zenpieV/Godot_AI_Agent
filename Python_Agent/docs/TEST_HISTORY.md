@@ -761,8 +761,10 @@ High (correctness).
 ## Session Persistence Tests
 
 On 2026-09-05, focused tests were added to validate the persistent
-`AgentSession` lifecycle. The full suite reached 56 tests (55 previously
-plus the generator termination regression test).
+`AgentSession` lifecycle. The full suite reached 56 tests at this
+milestone (55 previously plus the generator termination regression
+test); it has since grown to 64 with provider-contract and
+Observability v1 telemetry tests.
 
 ### Tests Added
 
@@ -776,7 +778,7 @@ plus the generator termination regression test).
 
 ### Status
 
-Confirmed working (56 tests passing).
+Confirmed working (full suite now 64 tests passing).
 
 ---
 
@@ -825,7 +827,7 @@ calls after session termination.
 
 ### Status
 
-Confirmed working. Full suite: 56 tests passing.
+Confirmed working. Full suite: 64 tests passing.
 
 ---
 
@@ -853,6 +855,46 @@ pytest installation in the active Python environment.
   ask user, or finalize) - the boundary blocks automatic resumption, not explicit recovery.
 - Mutations targeting different nodes must never be falsely blocked.
 - Read-only actions must never be blocked.
+
+---
+
+## Observability v1 Telemetry Tests
+
+Observability v1 telemetry (`agent/telemetry.py`) was added and wired
+into the agent loop and all four provider adapters. No tool semantics,
+`AgentDecision` schemas, or batch-boundary behavior were changed. The
+adapters now return a `ProviderResult(text, usage)` envelope;
+`ask_model()` still returns the model text as a string.
+
+### Tests Added / Updated
+
+| Test | Purpose |
+|------|---------|
+| `test_model_usage_available_is_recorded` | Provider usage metadata is normalized (`TokenUsage`) and recorded on the model-call telemetry entry |
+| `test_model_usage_unavailable_is_not_fabricated` | When no usage metadata exists, usage stays unavailable and is not invented |
+| `test_model_failure_records_duration_and_error` | A failed model call records duration and a safe (secret-redacted) error message |
+| `test_batch_telemetry_preserves_batch_boundary` | Batch telemetry records stopped-early state without weakening boundary enforcement |
+| `test_session_summary_aggregates_known_and_unknown_usage` | Session summary sums known token counts, flags incomplete totals (`total_tokens_complete`, `usage_unavailable_count`), and counts actions/batches/compactions |
+
+Adapter tests were updated to assert the `ProviderResult` envelope:
+`tests/test_gemini_provider.py` (including
+`test_ask_gemini_normalizes_usage_metadata`) and
+`tests/test_provider_adapters.py`.
+
+### Status
+
+Confirmed working. Full suite: 64 passed (25 batch-boundary,
+31 provider-contract, 6 provider-adapter, 2 Gemini provider).
+
+Only mocked provider responses were used; no live provider usage
+metadata was validated in this milestone.
+
+### Regression Risk
+
+- Telemetry recording must stay side-effect-free: a telemetry failure
+  must not change tool execution or boundary decisions.
+- Missing usage metadata must never be replaced with estimated values.
+- `safe_error_message()` must keep truncating and redacting API keys.
 
 ---
 

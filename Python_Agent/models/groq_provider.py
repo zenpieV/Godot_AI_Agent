@@ -4,6 +4,7 @@ import time
 import logging
 
 from groq import Groq
+from agent.telemetry import ProviderResult, normalize_usage
 
 # Import specific error types defensively - the exact class names have
 # been stable across recent groq-python versions, but we never want a
@@ -359,6 +360,9 @@ def ask_groq(
             "Groq returned an empty model response."
         )
 
-    return (
-        message.content
+    return ProviderResult(
+        text=message.content,
+        usage=normalize_usage(
+            getattr(response, "usage", None)
+        ),
     )

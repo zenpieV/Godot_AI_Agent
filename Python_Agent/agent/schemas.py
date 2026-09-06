@@ -123,11 +123,6 @@ class SetPropertiesAction(BaseAction):
 # ==========================================
 
 
-class ListNodesAction(BaseAction):
-
-    action: Literal["list_nodes"]
-
-
 class DescribeCurrentSceneAction(BaseAction):
 
     action: Literal["describe_current_scene"]
@@ -161,7 +156,6 @@ BatchableAction = Annotated[
         ReparentNodeAction,
         DuplicateNodeAction,
         SetPropertiesAction,
-        ListNodesAction,
         DescribeCurrentSceneAction,
     ],
     Field(
@@ -226,7 +220,6 @@ AgentDecision = Annotated[
         ReparentNodeAction,
         DuplicateNodeAction,
         SetPropertiesAction,
-        ListNodesAction,
         DescribeCurrentSceneAction,
         BatchAction,
         FinalAnswerAction,

@@ -3,6 +3,7 @@ import os
 import httpx
 
 from config.settings import OPENROUTER_MODEL
+from agent.telemetry import ProviderResult, normalize_usage
 
 
 OPENROUTER_API_URL = (
@@ -166,4 +167,9 @@ def ask_openrouter(
             "OpenRouter returned an empty model response."
         )
 
-    return content
+    return ProviderResult(
+        text=content,
+        usage=normalize_usage(
+            response_data.get("usage")
+        ),
+    )

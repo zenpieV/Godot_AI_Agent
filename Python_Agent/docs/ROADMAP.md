@@ -42,8 +42,8 @@ For every new capability:
 
 Static architecture rules belong in:
 
-- `.agentrules/rules/01-DEVELOPMENT_RULES.md`
-- `.agentrules/rules/02-PROJECT_ARCHITECTURE.md`
+- `.agentrules/01-DEVELOPMENT_RULES.md`
+- `.agentrules/02-PROJECT_ARCHITECTURE.md`
 
 Current implementation state belongs in:
 
@@ -421,6 +421,25 @@ Sensitive credentials must never appear in logs.
 
 ---
 
+## Implementation Status
+
+Partially implemented:
+
+- Structured session/step logging with session IDs (console +
+  `agent.log`).
+- Observability v1 in-memory telemetry (`agent/telemetry.py`): model
+  calls with normalized token usage, tool actions, batches, context
+  compactions, and a session summary logged on termination, including
+  API-key redaction in recorded error messages.
+
+Deferred (not built):
+
+- Persistent JSONL telemetry export.
+- Godot-side telemetry UI.
+- Cost analysis and usage-based reporting.
+
+---
+
 ## Desired Logging Properties
 
 Logs should eventually support answering questions such as:
@@ -612,7 +631,6 @@ The exact next implementation task must always be chosen using the current state
 - Provider abstraction formalization and provider-contract test harness.
 - Groq end-to-end validation.
 - Expanded Godot operations (scripts, resources, project inspection).
-- Session-summary/observability on termination.
 
 ---
 

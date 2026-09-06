@@ -6,6 +6,7 @@ import pytest
 
 from config.settings import GEMINI_MODEL
 from models import gemini_provider, groq_provider
+from agent.telemetry import ProviderResult
 
 
 CONVERSATION = [
@@ -39,7 +40,9 @@ def test_gemini_maps_messages_schema_and_json_response(monkeypatch):
 
     result = gemini_provider.ask_gemini(CONVERSATION, schema)
 
-    assert result == response.text
+    assert isinstance(result, ProviderResult)
+    assert result.text == response.text
+    assert result.usage.available is False
     generate_content.assert_called_once()
     request = generate_content.call_args.kwargs
     assert request["model"] == GEMINI_MODEL
@@ -74,7 +77,9 @@ def test_gemini_retries_transient_errors_without_live_sdk(monkeypatch):
 
     result = gemini_provider.ask_gemini([], {})
 
-    assert result == "ok"
+    assert isinstance(result, ProviderResult)
+    assert result.text == "ok"
+    assert result.usage.available is False
     assert generate_content.call_count == 3
     assert gemini_provider.time.sleep.call_count == 2
 
@@ -121,7 +126,9 @@ def test_groq_maps_messages_and_request_options(monkeypatch):
 
     result = groq_provider.ask_groq(CONVERSATION, {"ignored": True})
 
-    assert result == response.choices[0].message.content
+    assert isinstance(result, ProviderResult)
+    assert result.text == response.choices[0].message.content
+    assert result.usage.available is False
     groq_constructor.assert_called_once_with(
         api_key="test-key",
         max_retries=groq_provider.GROQ_MAX_RETRIES,

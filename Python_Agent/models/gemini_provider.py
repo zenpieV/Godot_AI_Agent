@@ -7,6 +7,11 @@ from google import genai
 from google.genai import errors as genai_errors
 
 from config.settings import GEMINI_MODEL
+from agent.telemetry import (
+    ProviderResult,
+    normalize_usage,
+    provider_result_text,
+)
 
 
 load_dotenv()
@@ -330,11 +335,18 @@ def ask_gemini(
             )
 
 
-    if not response.text:
+    response_text = provider_result_text(response)
+
+    if not response_text:
 
         raise RuntimeError(
             "Gemini returned an empty response."
         )
 
 
-    return response.text
+    return ProviderResult(
+        text=response_text,
+        usage=normalize_usage(
+            getattr(response, "usage_metadata", None)
+        ),
+    )

@@ -8,7 +8,7 @@ coding/debugging session working on the Godot AI Agent project.
 Read this file first, then inspect the referenced source files before
 changing anything.
 
-**Handoff date:** 2026-09-05
+**Handoff date:** 2026-09-06
 
 ------------------------------------------------------------------------
 
@@ -61,6 +61,7 @@ The current source archive was refreshed on 2026-09-04/05 and includes the lates
 agent/godot_agent.py
 agent/schemas.py
 agent/boundary.py
+agent/telemetry.py
 ```
 
 ## Providers
@@ -115,7 +116,7 @@ From `config/settings.py`:
 MODEL_PROVIDER = "gemini"
 MAX_BATCH_SIZE = 5
 OLLAMA_MODEL = "qwen3-vl:4b"
-GEMINI_MODEL = "gemini-3.1-flash-lite" OR "gemini-3.5-flash-lite" depending on availability.
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 OPENROUTER_MODEL = "cohere/north-mini-code:free"
 ```
 
@@ -166,20 +167,29 @@ set_properties
 ### Temporary/prototype
 
 ``` text
-list_nodes
 describe_current_scene
 ```
+
+`list_nodes` was an obsolete prototype action and has been removed.
+It is rejected by `AgentDecision` validation, and regression tests
+(`test_list_nodes_is_not_in_agent_decision`,
+`test_list_nodes_is_not_in_batchable_action`) keep it out.
 
 ### Control
 
 ``` text
 batch
 final_answer
+exit_session
 ```
 
 A batch is limited to 5 actions.
 
 `final_answer` is not a batch item.
+
+`exit_session` is not a batch item; it terminates the entire session
+(see `TOOL_PROTOCOL.md` for `final_answer` vs. `exit_session` vs.
+`/exit` semantics).
 
 ------------------------------------------------------------------------
 
@@ -305,6 +315,12 @@ The latest recorded direct run before the name cleanup was:
 24 passed
 ```
 
+The current direct run result is:
+
+``` text
+25 passed
+```
+
 The duplicate name has now been cleaned up as an isolated maintenance
 change. Re-run the focused command in an environment with pytest installed.
 
@@ -413,7 +429,7 @@ Primary fast cloud provider.
 Current model:
 
 ``` text
-gemini-3.1-flash-lite OR gemini-3.5-flash-lite
+gemini-3.1-flash-lite
 ```
 
 Lazy initialization is implemented.
@@ -573,7 +589,7 @@ Expected current result:
 Full suite:
 
 ``` text
-56 passed
+64 passed
 ```
 
 ### Step 5
@@ -585,16 +601,17 @@ Only then make the smallest change needed for the requested task.
 # 16. Recommended Immediate Development Order
 
 ``` text
-1. Preserve batch boundary
-2. Clean duplicate test name
-3. Add provider contract tests
-4. Validate Groq end-to-end (less priority)
-5. Validate OpenRouter end-to-end (less priority)
-6. Validate Ollama through the same contract (less priority)
-7. Improve model argument reliability
-8. Improve runtime provider configuration
-9. Expand Godot tools
-10. Consider routing/fallback
+1. Preserve batch boundary (standing invariant, not a task)
+2. Clean duplicate test name (DONE)
+3. Add provider contract tests (DONE: test_provider_contract.py)
+4. Observability v1 telemetry (DONE: agent/telemetry.py)
+5. Validate Groq end-to-end (less priority, pending)
+6. Validate OpenRouter end-to-end (less priority)
+7. Validate Ollama through the same contract (less priority)
+8. Improve model argument reliability
+9. Improve runtime provider configuration
+10. Expand Godot tools
+11. Consider routing/fallback
 ```
 
 Do not jump to autonomous routing or large editor automation yet.
@@ -643,20 +660,40 @@ source.
 
 ------------------------------------------------------------------------
 
-# 19. Good Candidate Next Task
+# 19. Completed Slices and Current Next Task
 
-The cleanest next engineering slice is:
+The provider contract has been formalized (`PROVIDER_CONTRACT_V1.md`),
+provider-level unit tests exist and pass, and Observability v1
+telemetry is implemented and tested. Groq live end-to-end validation
+on the existing agent loop remains pending.
 
-``` text
-formalize a provider contract
-+
-add provider-level unit tests
-+
-validate Groq on the existing agent loop
-```
-
-That work should be isolated from batch-boundary changes.
+Next slices should stay isolated from batch-boundary changes.
 
 The batch boundary is currently one of the strongest correctness
 guarantees in the system. Leave it alone unless the task explicitly
 concerns it.
+
+------------------------------------------------------------------------
+
+# 20. Observability v1 Telemetry
+
+Implemented in `agent/telemetry.py` and instrumented in
+`agent/godot_agent.py` and all four provider adapters.
+
+- Provider adapters return `ProviderResult(text, usage)`; the
+  agent-facing `ask_model()` still returns the model text as a string.
+- `TokenUsage` values come only from provider usage metadata,
+  normalized by `normalize_usage()` (Gemini, OpenAI-compatible, and
+  Ollama field names). Missing metadata is never estimated or
+  fabricated.
+- `SessionObservability` records model calls, tool actions (including
+  batch items, validation rejections, and boundary rejections),
+  batches, and context compactions.
+- `AgentSession.terminate()` aggregates a `SessionSummary` and logs it
+  as `"Session summary: ..."` with `total_tokens_complete` and
+  `usage_unavailable_count` flags.
+- `safe_error_message()` truncates error text to 200 characters and
+  redacts `GEMINI_API_KEY`, `GROQ_API_KEY`, and `OPENROUTER_API_KEY`
+  values before recording.
+- Deferred, not implemented: JSONL telemetry export, Godot-side UI,
+  cost analysis. Do not assume they exist.

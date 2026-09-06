@@ -22,6 +22,7 @@ Handles:
 - Agent sessions
 - Action validation and safety boundaries
 - Context management
+- Structured session telemetry: model calls, tool actions, batches, context compactions, token-usage normalization, and a session summary logged on termination
 - Tests
 
 Gemini is currently the primary cloud model, with Ollama/Qwen available for local inference.

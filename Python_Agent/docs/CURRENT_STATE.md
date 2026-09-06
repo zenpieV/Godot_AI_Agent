@@ -11,8 +11,8 @@ Do not treat this file as permanent architecture documentation.
 For stable architecture, see:
 
 * `AGENTS.md`
-* `.agentrules/rules/01-DEVELOPMENT_RULES.md`
-* `.agentrules/rules/02-PROJECT_ARCHITECTURE.md`
+* `.agentrules/01-DEVELOPMENT_RULES.md`
+* `.agentrules/02-PROJECT_ARCHITECTURE.md`
 
 ---
 
@@ -30,12 +30,17 @@ The current priority is to stabilize and formalize the existing agent architectu
 
 The immediate architectural direction is:
 
-1. Stabilize tool semantics.
+1. Stabilize tool semantics. (largely done: bounded batches, two-tier batch boundary)
 2. Reduce unnecessary model retries.
 3. Improve deterministic validation and constraint handling.
-4. Establish a clean provider abstraction.
-5. Add Groq alongside Gemini and Ollama.
+4. Establish a clean provider abstraction. (done: four provider adapters plus provider contract tests)
+5. Add Groq alongside Gemini and Ollama. (adapter implemented; live end-to-end validation still pending)
 6. Continue expanding Godot editor operations incrementally.
+
+With the provider abstraction, persistent sessions, agent-controlled
+session termination, and Observability v1 telemetry in place, the
+project is entering an **Advanced Tools Expansion** phase focused on
+broadening editor operations and completing provider parity validation.
 
 ---
 
@@ -83,7 +88,7 @@ A minimal hardening slice has been implemented to improve agent robustness witho
 - No changes to tool semantics or HTTP protocol
 - Only adds logging and error handling; does not change core behavior
 
-See `/memories/repo/HARDENING_SLICE_1_COMPLETED.md` for detailed implementation notes.
+Detailed implementation notes are superseded by the feature sections below and by `docs/TEST_HISTORY.md`.
 
 ---
 
@@ -316,6 +321,77 @@ user prompt occurs.
 `test_iter_steps_terminates_after_close`, which advances the generator
 once, calls `session.terminate()` while suspended, and asserts that the
 next advance raises `StopIteration`.
+
+---
+
+# Feature: Observability v1 Telemetry
+
+Observability v1 adds structured, in-memory session telemetry without
+changing agent behavior, `AgentDecision` schemas, tool semantics, or
+the HTTP protocol.
+
+## Implementation
+
+- `agent/telemetry.py` (new): the telemetry model and collector. It is
+  deliberately free of logging, Godot, and provider-SDK dependencies.
+- `agent/godot_agent.py`: the agent loop records telemetry at each
+  instrumentation point and attaches a `SessionObservability` instance
+  to the persistent `AgentSession`.
+
+## Core telemetry model
+
+- `TokenUsage`: normalized token counts from a single model call.
+  Values come only from provider usage metadata; when a provider
+  exposes no usage metadata, all fields are `None` and `available` is
+  `False`. Token counts are never estimated or fabricated.
+- `normalize_usage(metadata)`: maps provider-specific usage fields to
+  `input_tokens` / `output_tokens` / `total_tokens`. Recognized
+  aliases include Gemini (`prompt_token_count`,
+  `candidates_token_count`, `total_token_count`), OpenAI-compatible
+  APIs (`prompt_tokens`, `completion_tokens`, `total_tokens`), and
+  Ollama (`eval_count`).
+- `ProviderResult`: the return envelope for provider adapters,
+  wrapping the raw response text plus normalized `TokenUsage` so the
+  agent loop can record telemetry without re-parsing SDK objects.
+- `safe_error_message(error)`: truncates error text to 200 characters
+  and redacts `GEMINI_API_KEY`, `GROQ_API_KEY`, and
+  `OPENROUTER_API_KEY` values before the message is recorded.
+
+## Recorded events
+
+`SessionObservability` (keyed by session ID) collects:
+
+- Model calls (`record_model_call`): call ID, turn/step numbers,
+  provider, model, duration, usage, success/failure, and a safe error
+  message on failure. Recorded for every provider invocation,
+  including failures.
+- Tool actions (`record_tool_action`): turn/step, action type,
+  success, duration, and the originating model-call ID. Recorded for
+  single actions, batch items, validation rejections, and
+  batch-boundary rejections.
+- Batches (`record_batch`): batch size, succeeded/failed counts,
+  `stopped_early`, `stopped_at_index`, duration, and overall success.
+- Compactions (`record_compaction`): turn/step, original vs. summary
+  length, the triggering action, and duration.
+
+## Session summary
+
+When `AgentSession.terminate()` runs, `get_summary()` aggregates the
+recorded events into a `SessionSummary`: turns completed, distinct
+agent steps, model calls, token totals, action success/failure counts,
+batch counts, compaction count, wall duration, and the termination
+reason. The summary is logged as `"Session summary: ..."`. When usage
+metadata is missing for some calls, `usage_unavailable_count` is
+nonzero and `total_tokens_complete` is `False` rather than the totals
+being guessed.
+
+## Backward compatibility
+
+- No changes to `AgentDecision` schemas or tool semantics.
+- Provider adapters now return `ProviderResult`; the agent-facing
+  `ask_model()` still returns the model text as a string.
+- Future consumers (JSONL export, Godot UI, cost analysis) are
+  explicitly deferred and are not built in this milestone.
 
 ---
 
@@ -757,7 +833,13 @@ docs/TEST_HISTORY.md
 
 # Immediate Development Priorities
 
-## Priority 1: Inspect and Stabilize Current Agent Architecture
+Status update: Priorities 1 and 2 below are complete. Priority 3 is
+partially complete (the Groq adapter is implemented and covered by
+contract tests; live end-to-end validation is still pending). The
+project is entering an Advanced Tools Expansion phase: broadening
+Godot editor operations while completing provider parity validation.
+
+## Priority 1: Inspect and Stabilize Current Agent Architecture (COMPLETED)
 
 Before adding large new features, inspect the current implementation and identify:
 
@@ -773,7 +855,7 @@ Do not rewrite the agent loop without evidence from the current implementation.
 
 ---
 
-## Priority 2: Provider Abstraction
+## Priority 2: Provider Abstraction (COMPLETED)
 
 Create or refine a clean provider abstraction so that the core agent loop does not depend directly on Gemini-specific implementation details.
 
@@ -800,7 +882,7 @@ Do not implement complex autonomous routing until multiple providers are actuall
 
 ---
 
-## Priority 3: Groq Integration
+## Priority 3: Groq Integration (ADAPTER IMPLEMENTED; LIVE E2E VALIDATION PENDING)
 
 After the provider abstraction is sufficiently clear, integrate Groq.
 

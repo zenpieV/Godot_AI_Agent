@@ -3,12 +3,20 @@ from models.gemini_provider import ask_gemini
 from models.groq_provider import ask_groq
 from models.openrouter_provider import ask_openrouter
 
-from config.settings import MODEL_PROVIDER, MAX_BATCH_SIZE
+from config.settings import (
+    MODEL_PROVIDER,
+    MAX_BATCH_SIZE,
+    GEMINI_MODEL,
+    OLLAMA_MODEL,
+    OPENROUTER_MODEL,
+)
+from models.groq_provider import GROQ_MODEL
 
 import json
 import re
 import logging
 import uuid
+import time
 
 from pydantic import (
     TypeAdapter,
@@ -18,6 +26,12 @@ from pydantic import (
 from typing import Optional
 
 from agent.schemas import AgentDecision
+from agent.telemetry import (
+    ProviderResult,
+    SessionObservability,
+    TokenUsage,
+    safe_error_message,
+)
 
 from tools.scene_tools import (
     get_scene_tree,
@@ -114,8 +128,6 @@ ACTION_REQUIREMENTS = {
         "node_path",
         "properties_json",
     ),
-
-    "list_nodes": (),
 
     "describe_current_scene": (),
 
@@ -655,6 +667,9 @@ def compact_conversation(
     conversation,
     execution_result_records,
     logger,
+    observability=None,
+    turn_number=0,
+    step_number=0,
 ):
     """
     Replace only execution-result messages that are
@@ -776,6 +791,14 @@ def compact_conversation(
             f"(original ~{original_length} chars, "
             f"summary ~{len(new_content)} chars)."
         )
+        if observability is not None:
+            observability.record_compaction(
+                turn_number=turn_number,
+                step_number=step_number,
+                original_length=original_length,
+                summary_length=len(new_content),
+                action=record["action"],
+            )
 
 
 # ==========================================
@@ -942,73 +965,89 @@ def normalize_agent_response(
 
 def ask_model(
     conversation,
+    observability=None,
+    turn_number=0,
+    step_number=0,
 ):
 
     schema = (
         AGENT_DECISION_ADAPTER.json_schema()
     )
 
-    if MODEL_PROVIDER == "ollama":
+    providers = {
+        "ollama": (ask_ollama, OLLAMA_MODEL),
+        "gemini": (ask_gemini, GEMINI_MODEL),
+        "groq": (ask_groq, GROQ_MODEL),
+        "openrouter": (ask_openrouter, OPENROUTER_MODEL),
+    }
+    provider_call = providers.get(MODEL_PROVIDER)
+    if provider_call is None:
+        raise ValueError(
+            "Unknown model provider: " + str(MODEL_PROVIDER)
+        )
 
-        return ask_ollama(
+    provider, model = provider_call
+    call_id = str(uuid.uuid4())[:8]
+    started_at = time.time()
+    started_monotonic = time.monotonic()
+    try:
+        response = provider(
             conversation=conversation,
             schema=schema,
         )
-
-    if MODEL_PROVIDER == "gemini":
-
-        return ask_gemini(
-            conversation=conversation,
-            schema=schema,
+        result = (
+            response
+            if isinstance(response, ProviderResult)
+            else ProviderResult(text=response)
         )
+    except Exception as error:
+        if observability is not None:
+            observability.record_model_call(
+                call_id=call_id,
+                turn_number=turn_number,
+                step_number=step_number,
+                provider=MODEL_PROVIDER,
+                model=model,
+                duration_ms=(time.monotonic() - started_monotonic) * 1000,
+                usage=TokenUsage(),
+                success=False,
+                started_at=started_at,
+                error=safe_error_message(error),
+            )
+        raise
 
-    if MODEL_PROVIDER == "groq":
-
-        return ask_groq(
-            conversation=conversation,
-            schema=schema,
+    duration_ms = (time.monotonic() - started_monotonic) * 1000
+    if observability is not None:
+        observability.record_model_call(
+            call_id=call_id,
+            turn_number=turn_number,
+            step_number=step_number,
+            provider=MODEL_PROVIDER,
+            model=model,
+            duration_ms=duration_ms,
+            usage=result.usage,
+            success=True,
+            started_at=started_at,
         )
-
-    if MODEL_PROVIDER == "openrouter":
-
-        return ask_openrouter(
-            conversation=conversation,
-            schema=schema,
+        logger.info(
+            "Model call completed: provider=%s model=%s duration=%.1fms "
+            "input_tokens=%s output_tokens=%s total_tokens=%s",
+            MODEL_PROVIDER,
+            model,
+            duration_ms,
+            result.usage.input_tokens
+            if result.usage.available else "unknown",
+            result.usage.output_tokens
+            if result.usage.available else "unknown",
+            result.usage.total_tokens
+            if result.usage.available else "unknown",
         )
-
-    raise ValueError(
-        "Unknown model provider: "
-        + str(
-            MODEL_PROVIDER
-        )
-    )
+    return result.text
 
 
 # ==========================================
 # 4. Temporary prototype tools
 # ==========================================
-
-def list_nodes():
-
-    return [
-        {
-            "name": "Main",
-            "type": "Node2D",
-        },
-        {
-            "name": "Player",
-            "type": "CharacterBody2D",
-        },
-        {
-            "name": "Sprite2D",
-            "type": "Sprite2D",
-        },
-        {
-            "name": "Camera2D",
-            "type": "Camera2D",
-        },
-    ]
-
 
 def describe_current_scene():
 
@@ -1034,6 +1073,44 @@ def describe_current_scene():
 
 
 def execute_single_action(
+    decision,
+    observability=None,
+    turn_number=0,
+    step_number=0,
+    model_call_id=None,
+):
+    started = time.monotonic()
+    try:
+        result = _execute_single_action(decision)
+    except Exception:
+        if observability is not None:
+            observability.record_tool_action(
+                turn_number=turn_number,
+                step_number=step_number,
+                action=decision.action,
+                success=False,
+                duration_ms=(time.monotonic() - started) * 1000,
+                model_call_id=model_call_id,
+            )
+        raise
+
+    if observability is not None:
+        observability.record_tool_action(
+            turn_number=turn_number,
+            step_number=step_number,
+            action=decision.action,
+            success=(
+                bool(result.get("success"))
+                if isinstance(result, dict)
+                else True
+            ),
+            duration_ms=(time.monotonic() - started) * 1000,
+            model_call_id=model_call_id,
+        )
+    return result
+
+
+def _execute_single_action(
     decision,
 ):
 
@@ -1104,13 +1181,6 @@ def execute_single_action(
                 parsed_properties
             ),
         )
-
-    if (
-        decision.action
-        == "list_nodes"
-    ):
-
-        return list_nodes()
 
     if (
         decision.action
@@ -1207,6 +1277,10 @@ def execute_batch_actions(
     decision,
     request,
     logger,
+    observability=None,
+    turn_number=0,
+    step_number=0,
+    model_call_id=None,
 ):
     """
     Execute a validated BatchAction's sub-actions strictly in
@@ -1228,6 +1302,7 @@ def execute_batch_actions(
     total = len(
         decision.actions
     )
+    started = time.monotonic()
 
     logger.info(
         f"Batch decision received: {total} action(s)."
@@ -1291,6 +1366,16 @@ def execute_batch_actions(
 
         if not sub_action_is_valid:
 
+            if observability is not None:
+                observability.record_tool_action(
+                    turn_number=turn_number,
+                    step_number=step_number,
+                    action=sub_action.action,
+                    success=False,
+                    duration_ms=0.0,
+                    model_call_id=model_call_id,
+                )
+
             print(
                 "  -> validation failed: "
                 f"{sub_validation_error}"
@@ -1321,7 +1406,11 @@ def execute_batch_actions(
 
         sub_tool_result = (
             execute_single_action(
-                sub_action
+                sub_action,
+                observability=observability,
+                turn_number=turn_number,
+                step_number=step_number,
+                model_call_id=model_call_id,
             )
         )
 
@@ -1408,16 +1497,35 @@ def execute_batch_actions(
         f"\n--- Batch finished: {message} ---"
     )
 
-    return {
+    failed_count = sum(
+        1
+        for result in results
+        if not result.get("success") and not result.get("skipped")
+    )
+    batch_result = {
         "action": "batch",
         "success": all_succeeded,
         "batch_size": total,
         "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
         "stopped_early": stopped_early,
         "stopped_at_index": stopped_at_index,
         "results": results,
         "message": message,
     }
+    if observability is not None:
+        observability.record_batch(
+            turn_number=turn_number,
+            step_number=step_number,
+            batch_size=total,
+            succeeded_count=succeeded_count,
+            failed_count=failed_count,
+            stopped_early=stopped_early,
+            stopped_at_index=stopped_at_index,
+            duration_ms=(time.monotonic() - started) * 1000,
+            success=all_succeeded,
+        )
+    return batch_result
 
 
 # ==========================================
@@ -1427,6 +1535,8 @@ def execute_batch_actions(
 session_id = str(
     uuid.uuid4()
 )[:8]
+
+observability = SessionObservability(session_id)
 
 
 logging.basicConfig(
@@ -1479,6 +1589,7 @@ class AgentSession:
         conversation,
         logger,
         initial_request,
+        observability=None,
     ):
         self.conversation = conversation
         self.logger = logger
@@ -1488,11 +1599,40 @@ class AgentSession:
         self.blocked_skipped_actions: list[dict] = []
         self.turn_completed = False
         self.closed = False
+        self.observability = observability
+        self.summary = None
 
-    def terminate(self):
+    def terminate(self, reason="terminated"):
 
         self.closed = True
         self.turn_completed = False
+        if self.observability is not None:
+            self.summary = self.observability.get_summary(
+                turns_completed=self.turn_number,
+                termination_reason=reason,
+            )
+            self.logger.info(
+                "Session summary: turns=%s steps=%s model_calls=%s "
+                "actions=%s succeeded=%s failed=%s batches=%s "
+                "batched_actions=%s compactions=%s duration=%.1fms "
+                "input_tokens=%s output_tokens=%s total_tokens=%s "
+                "usage_unavailable=%s termination=%s",
+                self.summary.turns_completed,
+                self.summary.agent_steps,
+                self.summary.model_calls,
+                self.summary.tool_action_count,
+                self.summary.successful_action_count,
+                self.summary.failed_action_count,
+                self.summary.batch_count,
+                self.summary.total_batched_actions,
+                self.summary.compaction_count,
+                self.summary.duration_ms,
+                self.summary.total_input_tokens,
+                self.summary.total_output_tokens,
+                self.summary.total_tokens,
+                self.summary.usage_unavailable_count,
+                reason,
+            )
 
     def begin_next_turn(self):
 
@@ -1722,15 +1862,11 @@ node_path
 new_parent_path
 new_name
 
-10. list_nodes
-
-Temporary prototype tool.
-
-11. describe_current_scene
+10. describe_current_scene
 
 Use only when visual information is necessary.
 
-12. final_answer
+11. final_answer
 
 Use only when the informational request has been
 answered or every requested operation has been
@@ -1911,6 +2047,7 @@ session = AgentSession(
     conversation,
     logger,
     user_request,
+    observability,
 )
 
 
@@ -1940,14 +2077,23 @@ for step in session.iter_steps(
     try:
 
         raw_response = ask_model(
-            conversation
+            conversation,
+            observability=observability,
+            turn_number=session.turn_number,
+            step_number=step + 1,
+        )
+
+        model_call_id = (
+            observability.model_calls[-1].call_id
+            if observability.model_calls
+            else None
         )
 
     except Exception as e:
 
         logger.error(
             "Model provider error: "
-            f"{type(e).__name__}: {str(e)}"
+            + safe_error_message(e)
         )
 
         print(
@@ -1964,6 +2110,7 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        session.terminate("model_call_failed")
         break
 
     print(
@@ -2022,6 +2169,7 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        session.terminate("response_normalization_failed")
         break
 
     except ValidationError as e:
@@ -2056,6 +2204,7 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        session.terminate("decision_validation_failed")
         break
 
     except Exception as e:
@@ -2079,6 +2228,7 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        session.terminate("response_validation_failed")
         break
 
     decision = (
@@ -2098,6 +2248,15 @@ for step in session.iter_steps(
     )
 
     if not action_is_valid:
+
+        observability.record_tool_action(
+            turn_number=session.turn_number,
+            step_number=step + 1,
+            action=decision.action,
+            success=False,
+            duration_ms=0.0,
+            model_call_id=model_call_id,
+        )
 
         validation_result = {
             "success": False,
@@ -2171,6 +2330,9 @@ for step in session.iter_steps(
             conversation,
             execution_result_records,
             logger,
+            observability=observability,
+            turn_number=session.turn_number,
+            step_number=step + 1,
         )
 
         continue
@@ -2246,6 +2408,15 @@ for step in session.iter_steps(
 
     if is_blocked:
 
+        observability.record_tool_action(
+            turn_number=session.turn_number,
+            step_number=step + 1,
+            action=decision.action,
+            success=False,
+            duration_ms=0.0,
+            model_call_id=model_call_id,
+        )
+
         logger.warning(
             "BLOCKED AUTOMATIC RESUME: %s",
             blocked_reason,
@@ -2283,6 +2454,10 @@ for step in session.iter_steps(
                 decision,
                 session.current_request,
                 logger,
+                observability=observability,
+                turn_number=session.turn_number,
+                step_number=step + 1,
+                model_call_id=model_call_id,
             )
         )
 
@@ -2290,7 +2465,11 @@ for step in session.iter_steps(
 
         tool_result = (
             execute_single_action(
-                decision
+                decision,
+                observability=observability,
+                turn_number=session.turn_number,
+                step_number=step + 1,
+                model_call_id=model_call_id,
             )
         )
 
@@ -2488,6 +2667,9 @@ for step in session.iter_steps(
         conversation,
         execution_result_records,
         logger,
+        observability=observability,
+        turn_number=session.turn_number,
+        step_number=step + 1,
     )
 
 else:

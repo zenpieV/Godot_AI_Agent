@@ -55,7 +55,8 @@ The system consists of two primary components.
 │ - Agent reasoning loop                      │
 │ - Provider abstraction                      │
 │ - Gemini provider                           │
-│ - Future Groq provider                      │
+│ - Groq provider                             │
+│ - OpenRouter provider                       │
 │ - Ollama/local inference support            │
 │ - Structured decisions                      │
 │ - Validation and constraint repair          │
@@ -113,6 +114,7 @@ Agent_Host/
 │   │   ├── godot_agent.py
 │   │   ├── boundary.py
 │   │   ├── schemas.py
+│   │   ├── telemetry.py
 │   │   └── ...
 │   │
 │   ├── models/
@@ -131,9 +133,8 @@ Agent_Host/
 │   ├── tests/
 │   ├── docs/
 │   └── .agentrules/
-│       └── rules/
-│           ├── 01-DEVELOPMENT_RULES.md
-│           └── 02-PROJECT_ARCHITECTURE.md
+│       ├── 01-DEVELOPMENT_RULES.md
+│       └── 02-PROJECT_ARCHITECTURE.md
 ```
 
 The exact file structure may evolve.
@@ -167,8 +168,9 @@ The system should evolve toward a provider abstraction rather than hard-coding t
 
 The intended provider ecosystem includes:
 
-* Gemini as an existing fast cloud model provider.
-* Groq as an additional high-speed cloud inference provider.
+* Gemini as the current primary fast cloud model provider.
+* Groq as an implemented high-speed cloud inference provider.
+* OpenRouter as an implemented additional cloud provider entry point.
 * Ollama for local inference.
 * Qwen models where appropriate through local or supported providers.
 * Potential future stronger cloud providers.
@@ -187,6 +189,7 @@ Provider abstraction
   │
   ├── Gemini provider
   ├── Groq provider
+  ├── OpenRouter provider
   ├── Ollama provider
   └── Future providers
 ```

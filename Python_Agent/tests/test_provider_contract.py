@@ -14,9 +14,15 @@ from agent.boundary import (
 )
 from agent.schemas import (
     BatchAction,
+    BatchableAction,
     ExitSessionAction,
     FinalAnswerAction,
     RenameNodeAction,
+)
+from agent.telemetry import (
+    ProviderResult,
+    SessionObservability,
+    TokenUsage,
 )
 
 
@@ -599,6 +605,190 @@ def test_iter_steps_terminates_after_close(agent_module):
 
     with pytest.raises(StopIteration):
         next(steps)
+
+
+def test_list_nodes_is_not_in_batchable_action():
+    """Regression: list_nodes is an obsolete prototype action.
+
+    It must NOT be accepted as a BatchableAction. Previously, list_nodes
+    was batchable and its Python implementation returned a list instead
+    of a dict, causing:
+        AttributeError: 'list' object has no attribute 'get'
+    inside execute_batch_actions().
+    """
+    from pydantic import TypeAdapter
+
+    adapter = TypeAdapter(BatchableAction)
+    with pytest.raises(ValidationError):
+        adapter.validate_json(
+            json.dumps(
+                {
+                    "action": "list_nodes",
+                    "reason": "should be rejected",
+                }
+            )
+        )
+
+
+def test_list_nodes_is_not_in_agent_decision():
+    """list_nodes must not be a valid top-level AgentDecision either."""
+    from pydantic import TypeAdapter
+
+    from agent.schemas import AgentDecision
+
+    adapter = TypeAdapter(AgentDecision)
+    with pytest.raises(ValidationError):
+        adapter.validate_json(
+            json.dumps(
+                {
+                    "action": "list_nodes",
+                    "reason": "should be rejected",
+                }
+            )
+        )
+
+
+def test_model_usage_available_is_recorded(agent_module, monkeypatch):
+    telemetry = SessionObservability("usage-session")
+    monkeypatch.setattr(agent_module, "MODEL_PROVIDER", "gemini")
+    monkeypatch.setattr(
+        agent_module,
+        "ask_gemini",
+        lambda **kwargs: ProviderResult(
+            text='{"action":"final_answer"}',
+            usage=TokenUsage(11, 7, 18, True),
+        ),
+    )
+
+    result = agent_module.ask_model(
+        [], telemetry, turn_number=2, step_number=3
+    )
+
+    assert result == '{"action":"final_answer"}'
+    call = telemetry.model_calls[0]
+    assert call.provider == "gemini"
+    assert call.model == agent_module.GEMINI_MODEL
+    assert call.usage.input_tokens == 11
+    assert call.usage.output_tokens == 7
+    assert call.usage.total_tokens == 18
+    assert call.usage.available is True
+    assert call.duration_ms >= 0
+
+
+def test_model_usage_unavailable_is_not_fabricated(agent_module, monkeypatch):
+    telemetry = SessionObservability("unknown-usage-session")
+    monkeypatch.setattr(agent_module, "MODEL_PROVIDER", "gemini")
+    monkeypatch.setattr(
+        agent_module,
+        "ask_gemini",
+        lambda **kwargs: ProviderResult(
+            text='{"action":"final_answer"}'
+        ),
+    )
+
+    agent_module.ask_model([], telemetry, turn_number=1, step_number=1)
+
+    usage = telemetry.model_calls[0].usage
+    assert usage.available is False
+    assert usage.input_tokens is None
+    assert usage.output_tokens is None
+    assert usage.total_tokens is None
+
+
+def test_model_failure_records_duration_and_error(agent_module, monkeypatch):
+    telemetry = SessionObservability("failure-session")
+    monkeypatch.setattr(agent_module, "MODEL_PROVIDER", "gemini")
+    monkeypatch.setattr(
+        agent_module,
+        "ask_gemini",
+        Mock(side_effect=RuntimeError("provider unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        agent_module.ask_model([], telemetry, turn_number=1, step_number=1)
+
+    call = telemetry.model_calls[0]
+    assert call.success is False
+    assert call.duration_ms >= 0
+    assert "provider unavailable" in call.error
+
+
+def test_batch_telemetry_preserves_batch_boundary(agent_module, monkeypatch):
+    telemetry = SessionObservability("batch-session")
+    decision = BatchAction(
+        action="batch",
+        reason="run known actions",
+        actions=[
+            RenameNodeAction(
+                action="rename_node",
+                reason="first",
+                node_path="A",
+                new_name="B",
+            ),
+            RenameNodeAction(
+                action="rename_node",
+                reason="second",
+                node_path="B",
+                new_name="C",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        agent_module,
+        "execute_single_action",
+        lambda decision, **kwargs: {"success": True},
+    )
+
+    result = agent_module.execute_batch_actions(
+        decision,
+        "rename the nodes",
+        logging.getLogger("batch-telemetry-test"),
+        observability=telemetry,
+        turn_number=1,
+        step_number=2,
+    )
+
+    assert result["success"] is True
+    batch = telemetry.batches[0]
+    assert batch.batch_size == 2
+    assert batch.succeeded_count == 2
+    assert batch.failed_count == 0
+    assert batch.stopped_early is False
+    assert batch.duration_ms >= 0
+
+
+def test_session_summary_aggregates_known_and_unknown_usage():
+    telemetry = SessionObservability("summary-session")
+    telemetry.record_model_call(
+        "call-1", 1, 1, "gemini", "test-model", 4.0,
+        TokenUsage(10, 5, 15, True), True,
+    )
+    telemetry.record_model_call(
+        "call-2", 1, 2, "ollama", "test-model", 2.0,
+        TokenUsage(), True,
+    )
+    telemetry.record_tool_action(1, 1, "rename_node", True, 1.0)
+    telemetry.record_tool_action(1, 2, "delete_node", False, 1.0)
+    telemetry.record_batch(1, 3, 2, 2, 0, False, None, 2.0, True)
+    telemetry.record_compaction(1, 3, 1000, 100, "find_nodes")
+
+    summary = telemetry.get_summary(1, "test complete")
+
+    assert summary.turns_completed == 1
+    assert summary.agent_steps == 2
+    assert summary.model_calls == 2
+    assert summary.total_input_tokens == 10
+    assert summary.total_output_tokens == 5
+    assert summary.total_tokens == 15
+    assert summary.total_tokens_complete is False
+    assert summary.usage_unavailable_count == 1
+    assert summary.tool_action_count == 2
+    assert summary.successful_action_count == 1
+    assert summary.failed_action_count == 1
+    assert summary.batch_count == 1
+    assert summary.total_batched_actions == 2
+    assert summary.compaction_count == 1
+    assert summary.termination_reason == "test complete"
 
 
 def agent_module_find_nodes():

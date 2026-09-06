@@ -19,9 +19,27 @@ The provider must:
 - accept the complete current conversation as dictionaries with `role` and `content`;
 - accept the JSON schema generated from the Pydantic `AgentDecision` discriminated union;
 - perform provider-specific request construction internally;
-- return the model response as a raw JSON string, not a provider SDK object and not a parsed decision;
+- return the model response as a raw JSON string, not a provider SDK object and not a parsed decision. Internally each adapter wraps that text with normalized usage metadata in a `agent/telemetry.ProviderResult(text, usage)` envelope; the agent-facing `ask_model()` still returns only the text string;
 - raise an exception when the request cannot produce a usable response; the agent catches provider-call failures and ends the session gracefully;
 - return a JSON object representing exactly one next `AgentDecision`, or return malformed/missing data that the agent will reject rather than silently accept.
+
+### Usage metadata
+
+All four adapters (Gemini, Groq, OpenRouter, Ollama) return
+`ProviderResult`, which carries the response text plus a normalized
+`TokenUsage`. `normalize_usage()` maps provider-specific usage fields
+to `input_tokens` / `output_tokens` / `total_tokens`:
+
+- Gemini: `prompt_token_count`, `candidates_token_count`, `total_token_count`
+- OpenAI-compatible: `prompt_tokens`, `completion_tokens`, `total_tokens`
+- Ollama: `eval_count`
+
+When a provider exposes no usage metadata, the fields remain `None`
+with `available=False`; values are never estimated or fabricated.
+The agent records this usage in model-call telemetry, and failed
+calls are recorded with a duration and a `safe_error_message()` that
+truncates the text to 200 characters and redacts `GEMINI_API_KEY`,
+`GROQ_API_KEY`, and `OPENROUTER_API_KEY` values.
 
 The provider does not execute tools, validate Godot paths, enforce batch boundaries, compact context, or perform final-answer handling. Those responsibilities remain in Python orchestration and the Godot bridge.
 
@@ -65,7 +83,7 @@ The agent applies the same provider-independent pipeline:
 - retries only `google.genai.errors.ServerError` up to three total attempts, with 1 and 2 second backoffs;
 - does not retry missing-key, client/request, schema, empty-response, or other non-server errors;
 - raises the provider/SDK exception for request failures and raises `RuntimeError` for empty text;
-- returns `response.text` unchanged to the agent.
+- returns `ProviderResult(text=response.text, usage=normalize_usage(response.usage_metadata))` to the agent.
 
 Gemini therefore provides the stronger remote structured-output constraint of the two active adapters, while local Pydantic validation remains authoritative.
 
@@ -83,7 +101,7 @@ Gemini therefore provides the stronger remote structured-output constraint of th
 - falls back to a normal completion call if the installed SDK lacks `with_raw_response`, losing header visibility and proactive pacing;
 - logs recognized rate-limit/API-status failures and re-raises all request exceptions;
 - raises `RuntimeError` for an empty or missing message content;
-- returns `response.choices[0].message.content` as raw text.
+- returns `ProviderResult(text=response.choices[0].message.content, usage=normalize_usage(response.usage))` to the agent.
 
 Groq's response is consequently subject to local Pydantic validation but only JSON-object constrained remotely, not schema constrained remotely.
 

@@ -35,8 +35,8 @@ Before making changes, read the applicable files below.
 These files contain persistent architectural and behavioral rules.
 
 text
-.agentrules/rules/01-DEVELOPMENT_RULES.md
-.agentrules/rules/02-PROJECT_ARCHITECTURE.md
+.agentrules/01-DEVELOPMENT_RULES.md
+.agentrules/02-PROJECT_ARCHITECTURE.md
 
 
 These rules should be treated as the default constraints for all development work.
