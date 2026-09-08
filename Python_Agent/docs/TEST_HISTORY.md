@@ -51,6 +51,33 @@ The host project and the plugin are now colocated with the Python agent package,
 
 # Confirmed Working Features
 
+## Gemini 400 Regression After Tool Expansion
+
+### Failure
+
+After the advanced inspection tools were added, Gemini 3.1 Flash Lite
+returned `400 INVALID_ARGUMENT` before the first agent action. Progressive
+live schema isolation showed that removing `CountNodesAction` from the
+schema restored success; removing the other new actions did not.
+
+### Cause and Fix
+
+The failure was specific to the nested `batch.actions` union. Once the
+Gemini adapter removed Pydantic's `oneOf` discriminator metadata,
+`CountNodesAction` and `FindNodesAction` presented overlapping filter
+branches. The Gemini adapter now removes only the `count_nodes` branch from
+that provider-only nested union. `count_nodes` remains a valid standalone
+and Python-batch action, and no Godot tool semantics changed.
+
+### Verification
+
+- Full Python suite: 182 passed.
+- Gemini provider adapter tests: 7 passed.
+- Live `display project settings`: recovered after two structured tool
+  failures and returned the expected 36 `application` settings.
+- Live `what tools do you have?`: completed with HTTP 200 and a final answer.
+- Editor diagnostics and `git diff --check`: passed.
+
 ## 1. Scene Tree Inspection
 
 ### Test
@@ -596,6 +623,37 @@ If the semantic meaning of a user constraint is ambiguous, it should not be blin
 
 ---
 
+## 15. get_node_property Action
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a Godot headless harness exercising
+`AIAgentPropertyTools.get_node_property_from_request`.
+
+Coverage:
+
+- Valid decision parses and passes `validate_agent_action`.
+- Blank/whitespace-only `node_path` and `property_name` are rejected
+  client-side (`"requires non-empty field(s): <field>"`).
+- The action is dispatchable from the registry and is read-only /
+  batchable (no boundary blocking).
+- Bridge success returns the resolved node name, node type, property
+  type, `editable` flag, and serialized value.
+- Bridge failure (node not found, property not found) is returned
+  unchanged (no exception wrapping, no partial execution).
+
+### Result
+
+- Python: 103 passed (8 new tests).
+- Godot 4.7.2 headless: 8/8 harness cases passed.
+
+### Status
+
+Confirmed working.
+
+---
+
 # Current Confirmed Tool Coverage
 
 The following operations have been manually exercised.
@@ -604,6 +662,10 @@ The following operations have been manually exercised.
 
 - `get_scene_tree`
 - `find_nodes`
+- `get_node_properties`
+- `get_node_property`
+- `validate_node_type`
+- `describe_current_scene`
 
 ## Mutation Operations
 
@@ -831,6 +893,48 @@ Confirmed working. Full suite: 64 tests passing.
 
 ---
 
+## Premature `exit_session` Guard
+
+### Bug
+
+Live stress test: user requested `delete omnitrix and end session`;
+Gemini returned only `exit_session` with
+`"Deleted 'Omnitrix' node and terminating the session as requested."`
+— no `delete_node` executed, but the session terminated anyway,
+treating the `exit_summary` text as evidence of performed work.
+
+### Fix
+
+Deterministic Python-side guard: `exit_session` is honored only after
+at least one tool action has executed in the current turn
+(`exit_session_is_allowed()` in `agent/godot_agent.py`). Otherwise the
+session is not terminated; the decision is rejected with a
+tool-result-shaped observation
+(`build_premature_exit_session_result()`) and the model must perform
+the requested work first. `/exit` is unchanged.
+
+### Tests
+
+| Test | Purpose |
+|------|---------|
+| `test_exit_session_cannot_substitute_for_unexecuted_mutation` | Bare `exit_session` claiming a deletion is rejected, never dispatches `delete_node`, session stays open |
+| `test_valid_delete_node_then_exit_session_still_works` | Real `delete_node` followed by `exit_session` still terminates normally |
+| `test_prompt_requires_work_before_exit_session` | System prompt requires requested work before `exit_session` and forbids claiming unexecuted actions |
+
+### Status
+
+Confirmed working. Full suite: 95 passed.
+
+### Limitation
+
+The guard proves "at least one tool action executed this turn", not
+"all requested work is complete". Detecting full request completion
+would require a natural-language intent parser, intentionally out of
+scope; the prompt additionally instructs the model to execute all
+requested actions before `exit_session`.
+
+---
+
 ## Known Issue: Empty Input
 
 Empty input at the `begin_next_turn()` prompt currently terminates the
@@ -895,6 +999,455 @@ metadata was validated in this milestone.
   must not change tool execution or boundary decisions.
 - Missing usage metadata must never be replaced with estimated values.
 - `safe_error_message()` must keep truncating and redacting API keys.
+
+---
+
+## Tool Expansion V2: validate_node_type
+
+Added the first V2 tool: read-only `validate_node_type`, validated
+end-to-end through the action registry.
+
+### Tests
+
+- Python suite: 90 passed (5 new: registry dispatch reaches
+  `tools/scene_tools.validate_node_type`, read-only boundary
+  non-interference with a live blocked-rename entry, decision
+  validation, blank `node_type` rejection, batchable membership).
+- Godot headless (4.7.2): 8/8 cases passed against the real
+  `ClassDB` (valid type, abstract base `CanvasItem`, non-Node
+  `Resource`, unknown class, whitespace-only, missing key,
+  `Node` itself, whitespace trimming).
+
+### Status
+
+Confirmed working. Python-side verification used a mocked bridge;
+Godot-side verification used the real ClassDB headlessly. No live
+end-to-end run against a running editor bridge was performed.
+
+### Regression Risk
+
+- `validate_node_type` must remain read-only: it must never be
+  added to `boundary._MUTATION_TARGET_KEYS` and must never modify
+  scene state.
+- The `valid` answer must come from `ClassDB` only, never from a
+  hardcoded type list.
+
+---
+
+## Advanced Tool: list_available_node_types
+
+### Implementation
+
+Added bounded ClassDB discovery for native, instantiable `Node` classes.
+The action accepts optional `inherits_from`, case-insensitive
+`name_contains`, and `limit` filters. Results are sorted class names
+only, with `total_matches` and `truncated`; unfiltered requests default
+to 50 names and never exceed 100. Invalid supplied filters return
+structured failures, while no matches return a successful empty list.
+
+The tool is read-only and batchable through the existing action registry.
+It does not alter scene state, undo/redo behavior, telemetry, or
+interrupted-batch mutation protection. `validate_node_type` remains the
+exact confirmation step for a candidate returned by this discovery tool.
+
+### Tests
+
+- Python contract and registry tests cover optional-filter validation,
+  maximum limit validation, batch membership, read-only boundary status,
+  dispatch arguments, combined-filter result passthrough, no-match, and
+  invalid-filter structured failure.
+- Godot 4.7.2 headless harness calls the real handler and ClassDB:
+  `Node2D` descendants include `Node2D` and `CharacterBody2D`;
+  case-insensitive `CharacterBody2D` filtering succeeds; combined
+  `Node2D` + `body` filtering succeeds; a nonexistent name returns zero
+  matches; invalid base, invalid limit, and blank filter return failures.
+  It also validates returned `CharacterBody2D` through the unchanged
+  `validate_node_type` handler.
+
+### Result
+
+Godot's existing running bridge had not reloaded its router script and
+therefore returned `Unknown endpoint` for the new route, so it was not
+restarted. The isolated real Godot 4.7.2 headless harness passed against
+the updated handler and actual ClassDB instead. The full Python suite
+passed: 114 tests.
+
+### Limitation
+
+The tool intentionally lists native ClassDB candidates only; it does not
+list project script classes or expose arbitrary class metadata.
+
+---
+
+## get_node_property: Node.name Regression
+
+### Reproduction and root cause
+
+The live editor bridge reproduced the request `Get the name property of
+Player. Do not modify anything.`: `Player.position` succeeded, but
+`Player.name` returned `Property not found: name on node Player.` The
+same live inspection confirmed that `name` is absent from
+`get_node_properties`.
+
+The action schema, registry dispatch, Python wrapper, HTTP route, and
+serializer were not the failing layer. Godot exposes `Node.name` as a
+scene-tree-visible special attribute but does not include
+`PROPERTY_USAGE_EDITOR` in its property-list metadata. The existing
+single-property lookup accepted only property-list entries with that
+flag, so it rejected `name` before reading or serializing it.
+
+### Fix
+
+`get_node_property` now has one explicit read-only exception for
+`Node.name`. It returns the actual `target_node.name` as `StringName`
+with `editable: false`; changes remain exclusive to the dedicated,
+undoable `rename_node` action. Property-list filtering and
+`get_node_properties` behavior are otherwise unchanged.
+
+### Regression coverage
+
+- Python registry/dispatch tests cover both `position` and `name`.
+- Python contract tests cover successful `position` and `name` reads,
+  plus unchanged structured failures for a missing node and unsupported
+  property.
+- Existing `validate_node_type` validation and dispatch coverage remains
+  part of the full suite.
+
+### Result
+
+- Focused Python tests: 73 passed.
+- Full Python suite: 106 passed.
+- Live Godot 4.7.2 editor bridge: `Player.name` returned `"Player"` as
+  a read-only `StringName`; `Player.position` still returned `Vector2`;
+  missing-node and unsupported-property requests returned their existing
+  structured failures. `validate_node_type(Node2D)` remained valid.
+
+### Remaining limitation
+
+`get_node_properties` intentionally continues to omit `name`, so a full
+property-list read is not a substitute for an explicit `name` read.
+
+---
+
+## Feature: `list_node_signals`
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a permanent Godot 4.7.2 headless harness
+(`addons/Execution_Agent/tests/list_node_signals_harness.gd`) exercising
+`AIAgentNodeTools.list_node_signals_from_request` against real
+`Node.get_signal_list()` reflection data.
+
+Coverage:
+
+- Valid decision parses, validates, and dispatches to
+  `tools/scene_tools.list_node_signals` with the exact `node_path`.
+- Blank `node_path` is rejected by required-field validation.
+- Bridge success and missing-node structured failures pass through
+  unchanged; batchable membership; read-only boundary status (never in
+  `_MUTATION_TARGET_KEYS` / `_BATCH_ACTION_EQUIVALENCE_KEYS`).
+- Headless harness, real nodes (`Root` → `Player` (Area2D) → `Plain`
+  (Node)): an Area2D returns its actual signals including
+  `area_entered` with a real `Object` argument; Node built-ins
+  (`tree_entered`, `renamed`) confirm inherited signals are preserved;
+  a plain Node with only built-in signals succeeds; a nonexistent node
+  returns `Node not found: ...`; blank and missing `node_path` return
+  structured errors; two calls are identical and names are sorted;
+  the result serializes to JSON.
+- Custom-signal regression: a real scripted fixture node
+  (`list_node_signals_custom_signal_fixture.gd`, declaring
+  `signal health_changed(new_health: int)`) is added to the harness
+  tree; the harness proves `health_changed` is discovered through the
+  same real `Node.get_signal_list()` path with correct argument
+  metadata, alongside inherited built-ins, and remains JSON-serializable.
+
+### Result
+
+- Focused Python tests: 97 passed.
+- Full Python suite: 138 passed.
+- Godot 4.7.2 headless harness: all cases passed.
+
+### Status
+
+Confirmed working. No live end-to-end run against a running editor
+bridge was performed; the running editor instance was deliberately not
+restarted. The route must exist in the editor's loaded router, so a
+live test requires an editor reload of the plugin first.
+
+---
+
+## Feature: `list_node_groups`
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a permanent Godot 4.7.2 headless harness
+(`addons/Execution_Agent/tests/list_node_groups_harness.gd`) exercising
+`AIAgentNodeTools.list_node_groups_from_request` against real node
+group state.
+
+Coverage:
+
+- Valid decision parses, validates, and dispatches to
+  `tools/scene_tools.list_node_groups` with the exact `node_path`.
+- Blank `node_path` is rejected by required-field validation.
+- Bridge success and missing-node structured failures pass through
+  unchanged; batchable membership; read-only boundary status (never in
+  `_MUTATION_TARGET_KEYS` / `_BATCH_ACTION_EQUIVALENCE_KEYS`).
+- Headless harness, real nodes with real `add_to_group()` assignments
+  (assigned deliberately in non-alphabetical order): a node with no
+  groups returns a successful empty result; a node with one group
+  returns exactly that group; a node with three groups returns exactly
+  `["characters", "enemies", "hostile"]` sorted regardless of
+  assignment order; `is_in_group()` on the real nodes agrees with the
+  reported membership; two `Area2D` nodes with different groups prove
+  membership is instance state, not class metadata; a nonexistent node
+  returns `Node not found: ...`; blank and missing `node_path` return
+  structured errors; repeated calls are byte-equivalent; the result
+  serializes to JSON.
+
+### Result
+
+- Focused Python tests: 105 passed.
+- Full Python suite: 146 passed.
+- Godot 4.7.2 headless harness: all cases passed.
+- The frozen `list_node_signals` harness was re-run and still passes.
+
+### Status
+
+Confirmed working. No live end-to-end run against a running editor
+bridge was performed; the running editor instance was deliberately not
+restarted. The route must exist in the editor's loaded router, so a
+live test requires an editor reload of the plugin first (same
+stale-router limitation documented for `list_available_node_types` and
+`list_node_signals`).
+
+---
+
+## Feature: `count_nodes`
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a permanent Godot 4.7.2 headless harness
+(`addons/Execution_Agent/tests/count_nodes_harness.gd`) exercising
+`AIAgentNodeTools.count_nodes_from_request` against a real,
+deterministic node hierarchy.
+
+Coverage:
+
+- Schema accepts a minimal request, the full shared filter shape, and
+  rejects unsupported `name_match` values (Pydantic Literal).
+- Registry membership, non-mutation classification, dispatch with
+  shared filters, bridge success/missing-parent failure passthrough,
+  and batchable membership.
+- Headless harness over a fixed hierarchy (`Level` with
+  `SpawnPoint`/`SpawnPoint2`/`TriggerArea`, `Enemies` with
+  `EnemyA`/`EnemyB`/`EnemyC`): no-filter count cross-checked against an
+  independent manual traversal of the same tree; exact, contains,
+  starts-with, and ends-with name filters; type filter; parent-path
+  subtree counting (including the parent itself, matching `find_nodes`
+  semantics); combined filters; zero matches as `count: 0`;
+  nonexistent parent returning the existing
+  `Parent node not found: ...` failure; `"."` root handling; multiple
+  same-type nodes; invalid `name_match` mode sharing the `find_nodes`
+  error; byte-equivalent repeat calls; JSON serializability; and the
+  guarantee that no node list is returned.
+
+### Result
+
+- Focused Python tests: 113 passed.
+- Full Python suite: 156 passed.
+- Godot 4.7.2 headless harness: all cases passed.
+- All pre-existing harnesses (`get_node_class_info`,
+  `list_available_node_types`, `list_node_signals`, `list_node_groups`)
+  re-run after the shared-filter refactor: all pass, confirming
+  `find_nodes` behavior is unchanged.
+
+### Status
+
+Confirmed working. No live end-to-end run against a running editor
+bridge was performed; the running editor instance was deliberately not
+restarted (known stale-router limitation, same as previous tools).
+
+---
+
+## Feature: `find_nodes_by_script`
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a permanent Godot 4.7.2 headless harness
+(`addons/Execution_Agent/tests/find_nodes_by_script_harness.gd`)
+exercising `AIAgentNodeTools.find_nodes_by_script_from_request`
+against real scripted nodes.
+
+Coverage:
+
+- Schema accepts a valid request; blank `script_path` is rejected by
+  required-field validation; registry membership, read-only
+  classification, dispatch, success/zero-match passthrough, and
+  batchable membership.
+- Headless harness with real `set_script()` attachments
+  (`PlayerA` Area2D + `PlayerB` Node2D sharing one fixture script,
+  `Enemy` Node with a second fixture script, `Plain` Node with no
+  script): the shared script returns exactly its two nodes with real
+  paths/names/types; the other script returns only its own node;
+  unscripted nodes never appear; a nonexistent script returns
+  `count: 0` (success, not error); prefix-less requests normalize to
+  the same canonical path and identical result; blank and missing
+  `script_path` return structured errors; repeated calls are
+  byte-equivalent; JSON serialization succeeds. Expected matches were
+  cross-checked by calling `get_script()` directly on the harness
+  nodes.
+
+### Result
+
+- Focused Python tests: 121 passed.
+- Full Python suite: 164 passed.
+- Godot 4.7.2 headless harness: all cases passed.
+- All pre-existing harnesses (`count_nodes`, `list_node_groups`,
+  `list_node_signals`, `list_available_node_types`,
+  `get_node_class_info`) re-run after the `collect_matching_nodes`
+  extension: all pass, confirming `find_nodes` traversal behavior is
+  unchanged.
+
+### Status
+
+Confirmed working. No live end-to-end run against a running editor
+bridge was performed for this tool.
+
+
+## Feature: `get_project_settings`
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a permanent Godot 4.7.2 headless harness
+(`addons/Execution_Agent/tests/get_project_settings_harness.gd`)
+exercising `AIAgentNodeTools.get_project_settings_from_request` against
+the live `ProjectSettings` runtime state.
+
+Coverage:
+
+- Schema accepts a valid request; registry membership, read-only
+  classification, dispatch, success/zero-match passthrough, and
+  batchable membership. A request with neither `setting_names` nor
+  `prefix` is rejected at runtime.
+- Headless harness covering exact single/multiple setting lookups,
+  missing-key reporting (`missing`, not failure), multi-setting names,
+  prefix enumeration with deterministic lexicographic ordering,
+  prefix-bound/`truncated` metadata, sensitive-token redaction (name in
+  `redacted`, value never exposed), and JSON serialization. Results were
+  cross-checked against direct `ProjectSettings.get_setting()` calls.
+
+### Result
+
+- Focused Python tests: 140 passed.
+- Full Python suite: 181 passed.
+- Godot 4.7.2 headless harness: all cases passed.
+- Pre-existing `count_nodes` harness re-run after the shared
+  `ai_agent_node_tools.gd` edits: passes, confirming no regression in the
+  shared file.
+
+### Status
+
+Confirmed working. No live end-to-end run against a running editor bridge
+was performed for this tool (the running editor predates the
+`/get_project_settings` route).
+
+---
+
+
+---
+
+## Inspection Tools Milestone Completion
+
+### Final additions
+
+The inspection surface now contains all 17 planned read-only tools. The
+final additions are:
+
+- `list_autoloads`: deterministic autoload names and resource targets from
+  live `ProjectSettings`, without parsing `project.godot`.
+- `get_editor_state`: edited-scene identity, open scenes, selected nodes,
+  and playing-scene state from the injected `EditorInterface`.
+- `list_scenes_in_project`: sorted `PackedScene` paths from the injected
+  editor resource filesystem; it reports an explicit not-ready failure while
+  the editor filesystem is scanning or importing.
+- `get_undo_history_summary`: read-only undo/redo availability and action
+  labels for global and edited-scene histories from the injected
+  `EditorUndoRedoManager`.
+
+### Validation
+
+- Focused Python contract and registry tests: 152 passed.
+- Full Python suite: 194 passed.
+- Godot 4.7.2 headless `list_autoloads` harness: passed with real in-memory
+  `ProjectSettings` autoload entries and JSON serialization.
+- Godot 4.7.2 headless editor-state, scene-list, and undo-summary harnesses:
+  passed their explicit editor-unavailable contracts. These harnesses cannot
+  own the plugin's `EditorInterface` or `EditorUndoRedoManager` in a normal
+  `SceneTree` process.
+- Godot 4.7.2 headless editor initialization: plugin scripts compiled.
+- Live bridge smoke tests: not completed because another Godot process was
+  already listening on port 8081 and the existing bridge timed out. No
+  process was terminated.
+
+The earlier Gemini schema regression fix remains provider-only: the
+`CountNodesAction` branch is excluded only from Gemini's nested batch union;
+the public schema and tool semantics are unchanged. Screenshot support and
+mutation tools remain deferred.
+
+---
+
+## Feature: `find_nodes_by_group`
+
+### Test
+
+Automated suite added to `tests/test_provider_contract.py` and
+`tests/test_registry.py`, plus a permanent Godot 4.7.2 headless harness
+(`addons/Execution_Agent/tests/find_nodes_by_group_harness.gd`)
+exercising `AIAgentNodeTools.find_nodes_by_group_from_request` against
+real group state.
+
+Coverage:
+
+- Schema accepts a valid request; blank `group_name` is rejected by
+  required-field validation; registry membership, read-only
+  classification, dispatch, success/zero-match passthrough, and
+  batchable membership.
+- Headless harness with real `add_to_group()` assignments
+  (`EnemyA` + `EnemyB` in `enemies`; `EnemyB` + `Boss` in `hostile`;
+  `Boss` also in `bosses`; `Civilian` ungrouped): the `enemies` query
+  returns exactly `EnemyA`/`EnemyB` with real paths/names/types in
+  traversal order; `hostile` returns `EnemyB`/`Boss`; `bosses` returns
+  `Boss` (multi-group nodes appear for each of their groups);
+  ungrouped nodes and the scene root never appear; a nonexistent group
+  returns `count: 0` (success, not error); case differences
+  (`Enemies`) and partial names (`enemy`) do not match; blank and
+  missing `group_name` return structured errors; repeated calls are
+  byte-equivalent; JSON serialization succeeds. Expected matches were
+  cross-checked with direct `is_in_group()` calls on the fixture
+  nodes.
+
+### Result
+
+- Focused Python tests: 131 passed.
+- Full Python suite: 172 passed.
+- Godot 4.7.2 headless harness: all cases passed.
+- All pre-existing harnesses (`count_nodes`, `find_nodes_by_script`,
+  `list_node_groups`, `list_node_signals`,
+  `list_available_node_types`, `get_node_class_info`) re-run after the
+  `collect_matching_nodes` extension: all pass, confirming
+  `find_nodes`, `find_nodes_by_script`, and `list_node_groups`
+  behavior are unchanged.
+
+### Status
+
+Confirmed working. No live end-to-end run against a running editor
+bridge was performed for this tool.
 
 ---
 

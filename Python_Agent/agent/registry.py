@@ -38,6 +38,7 @@ from tools import scene_tools
 
 from agent.schemas import (
     BatchAction,
+    CountNodesAction,
     CreateNodeAction,
     DeleteNodeAction,
     DescribeCurrentSceneAction,
@@ -45,10 +46,20 @@ from agent.schemas import (
     ExitSessionAction,
     FinalAnswerAction,
     FindNodesAction,
+    FindNodesByScriptAction,
+    FindNodesByGroupAction,
+    GetProjectSettingsAction,
+    ListAutoloadsAction,
+    GetEditorStateAction,
+    ListScenesInProjectAction,
+    GetUndoHistorySummaryAction,
     GetNodePropertiesAction,
     GetNodePropertyAction,
+    GetNodeClassInfoAction,
     GetSceneTreeAction,
     ListAvailableNodeTypesAction,
+    ListNodeSignalsAction,
+    ListNodeGroupsAction,
     RenameNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
@@ -101,6 +112,66 @@ def _execute_find_nodes(decision):
     )
 
 
+def _execute_count_nodes(decision):
+    return scene_tools.count_nodes(
+        node_name=(
+            decision.node_name
+        ),
+        node_type=(
+            decision.node_type
+        ),
+        parent_path=(
+            decision.parent_path
+        ),
+        name_match=(
+            decision.name_match
+            or "exact"
+        ),
+    )
+
+
+def _execute_find_nodes_by_script(decision):
+    return scene_tools.find_nodes_by_script(
+        script_path=(
+            decision.script_path
+        ),
+    )
+
+
+def _execute_find_nodes_by_group(decision):
+    return scene_tools.find_nodes_by_group(
+        group_name=(
+            decision.group_name
+        ),
+    )
+
+
+def _execute_get_project_settings(decision):
+    return scene_tools.get_project_settings(
+        setting_names=(
+            decision.setting_names
+        ),
+        prefix=(
+            decision.prefix
+        ),
+        limit=(
+            decision.limit
+        ),
+    )
+
+def _execute_list_autoloads(decision):
+    return scene_tools.list_autoloads()
+
+def _execute_get_editor_state(decision):
+    return scene_tools.get_editor_state()
+
+def _execute_list_scenes_in_project(decision):
+    return scene_tools.list_scenes_in_project()
+
+def _execute_get_undo_history_summary(decision):
+    return scene_tools.get_undo_history_summary()
+
+
 def _execute_get_node_properties(decision):
     return scene_tools.get_node_properties(
         node_path=(
@@ -116,6 +187,30 @@ def _execute_get_node_property(decision):
         ),
         property_name=(
             decision.property_name
+        ),
+    )
+
+
+def _execute_get_node_class_info(decision):
+    return scene_tools.get_node_class_info(
+        class_name=(
+            decision.class_name
+        ),
+    )
+
+
+def _execute_list_node_signals(decision):
+    return scene_tools.list_node_signals(
+        node_path=(
+            decision.node_path
+        ),
+    )
+
+
+def _execute_list_node_groups(decision):
+    return scene_tools.list_node_groups(
+        node_path=(
+            decision.node_path
         ),
     )
 
@@ -248,6 +343,62 @@ _ACTION_SPECS = (
         handler=_execute_find_nodes,
     ),
     ActionSpec(
+        name="count_nodes",
+        schema=CountNodesAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_count_nodes,
+    ),
+    ActionSpec(
+        name="find_nodes_by_script",
+        schema=FindNodesByScriptAction,
+        required_fields=("script_path",),
+        is_mutation=False,
+        handler=_execute_find_nodes_by_script,
+    ),
+    ActionSpec(
+        name="find_nodes_by_group",
+        schema=FindNodesByGroupAction,
+        required_fields=("group_name",),
+        is_mutation=False,
+        handler=_execute_find_nodes_by_group,
+    ),
+    ActionSpec(
+        name="get_project_settings",
+        schema=GetProjectSettingsAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_get_project_settings,
+    ),
+    ActionSpec(
+        name="list_autoloads",
+        schema=ListAutoloadsAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_list_autoloads,
+    ),
+    ActionSpec(
+        name="get_editor_state",
+        schema=GetEditorStateAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_get_editor_state,
+    ),
+    ActionSpec(
+        name="list_scenes_in_project",
+        schema=ListScenesInProjectAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_list_scenes_in_project,
+    ),
+    ActionSpec(
+        name="get_undo_history_summary",
+        schema=GetUndoHistorySummaryAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_get_undo_history_summary,
+    ),
+    ActionSpec(
         name="get_node_properties",
         schema=GetNodePropertiesAction,
         required_fields=("node_path",),
@@ -263,6 +414,27 @@ _ACTION_SPECS = (
         ),
         is_mutation=False,
         handler=_execute_get_node_property,
+    ),
+    ActionSpec(
+        name="get_node_class_info",
+        schema=GetNodeClassInfoAction,
+        required_fields=("class_name",),
+        is_mutation=False,
+        handler=_execute_get_node_class_info,
+    ),
+    ActionSpec(
+        name="list_node_signals",
+        schema=ListNodeSignalsAction,
+        required_fields=("node_path",),
+        is_mutation=False,
+        handler=_execute_list_node_signals,
+    ),
+    ActionSpec(
+        name="list_node_groups",
+        schema=ListNodeGroupsAction,
+        required_fields=("node_path",),
+        is_mutation=False,
+        handler=_execute_list_node_groups,
     ),
     ActionSpec(
         name="validate_node_type",

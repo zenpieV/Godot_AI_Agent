@@ -258,6 +258,54 @@ The rest of the agent should operate on normalized concepts such as:
 * Model response.
 * Error.
 
+---
+
+## 12. Gemini Schema Regression Guard
+
+When adding, removing, or reshaping an `AgentDecision` action, treat the
+Gemini response schema as a compatibility boundary. Do not assume that a
+Pydantic-valid discriminated union is accepted by Gemini after provider
+normalization.
+
+The known failure mode is:
+
+1. Pydantic emits `oneOf`, `$ref`, and discriminator metadata.
+2. The Gemini adapter removes the discriminator and converts `oneOf` to
+   `anyOf`.
+3. Structurally overlapping action branches, especially branches with the
+	same optional fields or several no-parameter actions, cause Gemini to
+	reject the entire request with `400 INVALID_ARGUMENT`.
+
+Required workflow for every action-schema change:
+
+1. Generate the exact `AgentDecision` schema used by `ask_model()`.
+2. Pass it through `make_gemini_schema_compatible()`.
+3. Inspect both the top-level action union and the nested `batch.actions`
+   union for overlapping branches, stale `$ref` entries, `oneOf`, or
+   `discriminator` keywords.
+4. Run the focused provider adapter tests.
+5. Run a real Gemini schema smoke test when credentials are available. If a
+   live call returns `400 INVALID_ARGUMENT`, isolate the changed actions by
+   removing them one at a time and as a group until the causal branch is
+   proven.
+
+The fix must remain provider-only. Preserve the public Pydantic action
+schemas, Python registry dispatch, batch validation, and Godot tool
+semantics. If Gemini cannot accept a branch inside a nested batch union,
+exclude or transform that branch only in the Gemini adapter while retaining
+the public contract. Add a regression assertion for the normalized schema
+and do not declare the task complete based only on mocked SDK tests.
+
+Before finalizing, verify at minimum:
+
+```text
+Python provider adapter tests pass
+Full Python suite passes
+Normalized Gemini schema contains no oneOf/discriminator
+Changed actions are present where intended
+No unintended branches remain in nested batch unions
+```
+
 Do not spread provider-specific implementation details throughout the agent loop.
 
 ---

@@ -2,6 +2,7 @@ from models.ollama_provider import ask_ollama
 from models.gemini_provider import ask_gemini
 from models.groq_provider import ask_groq
 from models.openrouter_provider import ask_openrouter
+from models.zai_provider import ask_zai
 
 from config.settings import (
     MODEL_PROVIDER,
@@ -9,6 +10,7 @@ from config.settings import (
     GEMINI_MODEL,
     OLLAMA_MODEL,
     OPENROUTER_MODEL,
+    ZAI_MODEL,
 )
 from models.groq_provider import GROQ_MODEL
 
@@ -921,6 +923,7 @@ def ask_model(
         "gemini": (ask_gemini, GEMINI_MODEL),
         "groq": (ask_groq, GROQ_MODEL),
         "openrouter": (ask_openrouter, OPENROUTER_MODEL),
+        "zai": (ask_zai, ZAI_MODEL),
     }
     provider_call = providers.get(MODEL_PROVIDER)
     if provider_call is None:
@@ -1389,6 +1392,64 @@ logger.info(
 )
 
 
+# ==========================================
+# 4.6 exit_session premature-exit guard
+# ==========================================
+#
+# exit_session is a pure termination decision: it performs no tool
+# work and must never be treated as evidence that a requested
+# action, especially a mutation, was executed. The main loop honors
+# it only after at least one tool action has been executed in the
+# current turn; otherwise the decision is rejected and the model is
+# asked to perform the requested work first. /exit remains the
+# human-controlled host-level termination path and is unaffected.
+
+
+EXIT_SESSION_GUARD_REASON = (
+    "exit_session may only terminate the session after the "
+    "current turn's requested actions have been executed: no tool "
+    "action has been executed in this turn. exit_session performs "
+    "no work itself and cannot substitute for any requested "
+    "action, including mutations. Execute each requested action "
+    "with a tool call first, then select exit_session only after "
+    "those tool actions have actually run. If the user simply "
+    "wants to end the session, reply with final_answer and tell "
+    "the user to type /exit."
+)
+
+
+def exit_session_is_allowed(
+    executed_tool_actions_this_turn: int,
+) -> bool:
+    """Deterministic guard for exit_session.
+
+    exit_session is allowed only when at least one tool action has
+    been executed in the current turn, so it cannot replace
+    unperformed work or fabricate evidence that work was done.
+    """
+    return executed_tool_actions_this_turn > 0
+
+
+def build_premature_exit_session_result() -> dict:
+    """Tool-result-shaped observation returned when the model selects
+    exit_session before executing any tool action in the current turn.
+
+    Mirrors the validation-failure observation so the rest of the
+    loop (conversation history, execution_result_records, context
+    compaction) handles it like any other rejected step.
+    """
+    return {
+        "success": False,
+        "validation_error": EXIT_SESSION_GUARD_REASON,
+        "action": "exit_session",
+        "message": (
+            "The proposed agent action was not executed. Return "
+            "one corrected next AgentDecision based on this "
+            "execution result."
+        ),
+    }
+
+
 class AgentSession:
 
     TERMINATION_COMMAND = "/exit"
@@ -1470,7 +1531,15 @@ class AgentSession:
             {
                 "role": "user",
                 "content": (
-                    "USER REQUEST:\n"
+                    "BEGIN ACTIVE USER TURN "
+                    + str(self.turn_number)
+                    + ".\n"
+                    + "Previous turns are completed session history. "
+                    + "Use their tool results and established entity "
+                    + "references when relevant, but do not repeat or "
+                    + "re-answer a previous user request or final answer "
+                    + "unless this new request explicitly asks for it.\n\n"
+                    + "CURRENT USER REQUEST:\n"
                     + next_request
                     + "\n\n"
                     + "Return exactly ONE AgentDecision "
@@ -1485,7 +1554,31 @@ class AgentSession:
         )
         return True
 
-    def complete_turn(self):
+    def complete_turn(self, final_decision=None):
+
+        if final_decision is not None:
+
+            self.conversation.append(
+                {
+                    "role": "assistant",
+                    "content": final_decision.model_dump_json(),
+                }
+            )
+
+            self.conversation.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "END OF COMPLETED USER TURN "
+                        + str(self.turn_number)
+                        + ". The preceding assistant response is the "
+                        + "final answer for that turn and is historical "
+                        + "context only. Do not repeat it as the answer "
+                        + "to a later turn."
+                    ),
+                }
+            )
+
         self.turn_completed = True
 
     def iter_steps(self, max_steps):
@@ -1549,7 +1642,8 @@ conversation = [
         "content": f"""
 You are an AI assistant helping a developer
 work with Godot.
-
+The developer who is developing you is called 'zenpieV'.
+This is only your developer, not necessarily the end user of the Godot project you are helping with.
 You operate in an iterative agent loop.
 
 The loop works like this:
@@ -1618,7 +1712,21 @@ Required parameter:
 
 node_path
 
-4. set_properties
+4. get_node_property
+
+Use when ONLY ONE specific property value
+from one specific node is required.
+
+Prefer this targeted action over
+get_node_properties when you need only a
+single property.
+
+Required parameters:
+
+node_path
+property_name
+
+5. set_properties
 
 Use when the user explicitly asks to change one
 or more properties of an existing node.
@@ -1631,7 +1739,7 @@ properties_json
 properties_json must be valid serialized JSON
 representing a JSON object.
 
-5. create_node
+6. create_node
 
 Required parameters:
 
@@ -1639,27 +1747,27 @@ parent_path
 node_type
 node_name
 
-6. rename_node
+7. rename_node
 
 Required parameters:
 
 node_path
 new_name
 
-7. delete_node
+8. delete_node
 
 Required parameter:
 
 node_path
 
-8. reparent_node
+9. reparent_node
 
 Required parameters:
 
 node_path
 new_parent_path
 
-9. duplicate_node
+10. duplicate_node
 
 Duplicates an existing node including its
 subtree, placing the copy under a new parent
@@ -1671,11 +1779,150 @@ node_path
 new_parent_path
 new_name
 
-10. describe_current_scene
+11. validate_node_type
+
+Use before create_node whenever you are not
+completely certain that a Godot class name is
+a valid, instantiable node type. Do not guess
+class names or retry failed create_node calls
+with different spellings.
+
+Required parameter:
+
+node_type
+
+The result states whether the name exists as a
+Godot class, whether it is a Node class, and
+whether it can be instantiated directly. A type
+that exists but is not a Node class (for example
+Resource) or cannot be instantiated directly
+(for example CanvasItem) is reported as not
+valid for node creation.
+
+12. list_available_node_types
+
+Use to discover native, instantiable Godot Node
+types before validating an exact candidate or
+calling create_node.
+
+Optional parameters:
+
+inherits_from
+name_contains
+limit
+
+Results contain sorted type names only. They are
+bounded (50 by default; 100 maximum), so inspect
+total_matches and truncated before assuming the
+list is exhaustive. Use validate_node_type on a
+chosen exact name before create_node when needed.
+
+13. get_node_class_info
+
+Use to inspect one registered Godot class. The
+result includes its direct base class and whether
+Godot can instantiate it. This is read-only and
+does not require a scene node path.
+
+Required parameter:
+
+class_name
+
+14. list_node_signals
+
+Use to inspect the signals exposed by one node.
+The result includes built-in and inherited signal
+definitions, not connection state.
+
+Required parameter:
+
+node_path
+
+15. list_node_groups
+
+Use to inspect the groups that one node currently
+belongs to. Group membership is instance state and
+the result is sorted.
+
+Required parameter:
+
+node_path
+
+16. count_nodes
+
+Use when only the number of matching nodes is
+needed. It shares find_nodes filters and returns
+the count without returning the node list.
+
+Optional parameters:
+
+node_name
+node_type
+parent_path
+name_match
+
+17. find_nodes_by_script
+
+Use to find nodes with an exact attached script
+resource path. A missing res:// prefix is normalized.
+
+Required parameter:
+
+script_path
+
+18. find_nodes_by_group
+
+Use to find nodes with exact, case-sensitive live
+membership in one group. Zero matches is a success.
+
+Required parameter:
+
+group_name
+
+19. get_project_settings
+
+Use to inspect project configuration from live
+ProjectSettings. Provide exact setting names and/or
+a bounded non-empty prefix; an unfiltered request is
+rejected to avoid a settings dump.
+
+Optional parameters:
+
+setting_names
+prefix
+limit
+
+20. list_autoloads
+
+Use to list configured project autoload names and
+resource targets. It reads live ProjectSettings,
+returns deterministic ordering, and is read-only.
+
+21. get_editor_state
+
+Use to inspect bounded current editor state,
+including the edited scene, open scenes, selected
+nodes, and playing-scene state. It requires the
+running editor plugin and does not scrape UI text.
+
+22. list_scenes_in_project
+
+Use to list scene resources known to the running
+editor filesystem. Results are sorted and the tool
+reports an explicit not-ready error while scanning
+or importing.
+
+23. get_undo_history_summary
+
+Use to inspect whether editor undo or redo is
+available and to read stable action labels. It is
+read-only; never use it to perform undo or redo.
+
+24. describe_current_scene
 
 Use only when visual information is necessary.
 
-11. final_answer
+25. final_answer
 
 Use only when the informational request has been
 answered or every requested operation has been
@@ -1688,7 +1935,7 @@ Required parameter:
 
 final_answer
 
-13. exit_session
+26. exit_session
 
 Use only when the entire persistent session is
 explicitly complete or genuinely unrecoverable.
@@ -1701,6 +1948,26 @@ task is complete and the user may reasonably continue
 working in the same session. Use final_answer for
 normal turn completion.
 
+exit_session performs NO tool work itself: it never
+creates, deletes, renames, inspects, or modifies
+anything.
+
+You MUST execute every action the user requested for
+the current turn as its own tool action (or batch)
+BEFORE selecting exit_session. exit_session cannot
+substitute for requested work.
+
+Never claim in exit_summary that any tool action was
+performed unless an actual tool result in this
+conversation proves it. For example, if you have not
+executed delete_node on "Omnitrix", never write that
+you deleted it.
+
+If the user asks to end the session but also requests
+work, perform all of the requested work first, then
+select exit_session only after those tool actions
+have actually executed.
+
 Required parameter:
 
 exit_summary
@@ -1708,7 +1975,7 @@ exit_summary
 exit_summary must briefly explain why the session is
 being terminated.
 
-14. batch
+27. batch
 
 Use only when you are already confident about a
 short, strictly sequential series of KNOWN,
@@ -1725,6 +1992,52 @@ A batch is a single JSON object:
     {{ "reason": "...", "action": "rename_node", ... }}
   ]
 }}
+
+IMPORTANT BATCH FORMAT:
+
+"actions" MUST be a JSON array of ACTION OBJECTS.
+
+Each array element MUST be a complete action object
+with its own "action" field.
+
+CORRECT:
+
+{{
+  "action": "batch",
+  "actions": [
+    {{
+      "reason": "Rename Heatblast HP",
+      "action": "rename_node",
+      "node_path": "Negatrix/Heatblast/HP",
+      "new_name": "Health-60"
+    }},
+    {{
+      "reason": "Rename Heatblast Attack",
+      "action": "rename_node",
+      "node_path": "Negatrix/Heatblast/Attack",
+      "new_name": "Attack-100"
+    }}
+  ]
+}}
+
+INCORRECT:
+
+{{
+  "action": "batch",
+  "actions": [
+    "rename_node",
+    "node_path",
+    "Negatrix/Heatblast/HP",
+    "new_name",
+    "Health-60"
+  ]
+}}
+
+Never flatten action objects into a list of strings.
+Never put field names or field values directly into
+the "actions" array.
+The maximum number of elements in "actions" is
+{MAX_BATCH_SIZE}.
 
 Rules:
 
@@ -1871,9 +2184,16 @@ blocked_skipped_actions = session.blocked_skipped_actions
 MAX_STEPS = 12
 
 
+executed_tool_actions_this_turn = 0
+
+
 for step in session.iter_steps(
     MAX_STEPS
 ):
+
+    if step == 0:
+
+        executed_tool_actions_this_turn = 0
 
     logger.info(
         f"Step {step + 1} of {MAX_STEPS}"
@@ -2172,13 +2492,103 @@ for step in session.iter_steps(
             f"completed user turn: {session.current_request}"
         )
 
-        session.complete_turn()
+        session.complete_turn(decision)
         continue
 
     if (
         decision.action
         == "exit_session"
     ):
+
+        if (
+            not exit_session_is_allowed(
+                executed_tool_actions_this_turn
+            )
+        ):
+
+            logger.warning(
+                "BLOCKED PREMATURE exit_session with no "
+                "executed tool action in the current turn. "
+                "Summary: %s",
+                decision.exit_summary,
+            )
+
+            print(
+                "\nPREMATURE EXIT SESSION BLOCKED:"
+            )
+
+            print(
+                "exit_session cannot substitute for "
+                "requested work. No tool action has "
+                "been executed in the current turn."
+            )
+
+            print(
+                decision.exit_summary
+            )
+
+            guard_result = (
+                build_premature_exit_session_result()
+            )
+
+            conversation.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        decision.model_dump_json()
+                    ),
+                }
+            )
+
+            conversation.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "AGENT EXECUTION RESULT FOR "
+                        "THE PREVIOUS STEP:\n"
+                        + json.dumps(
+                            guard_result
+                        )
+                        + "\n\n"
+                        + "The proposed exit_session was "
+                        + "not accepted because no tool "
+                        + "action has been executed in "
+                        + "the current turn. If the user "
+                        + "requested any work, execute it "
+                        + "now with tool actions, and only "
+                        + "then select exit_session. If the "
+                        + "user simply wants to end the "
+                        + "session, reply with final_answer "
+                        + "and tell the user to type /exit."
+                    ),
+                }
+            )
+
+            execution_result_records.append(
+                {
+                    "step": step + 1,
+                    "action": decision.action,
+                    "conversation_index": (
+                        len(
+                            conversation
+                        )
+                        - 1
+                    ),
+                    "tool_result": None,
+                    "compacted": False,
+                }
+            )
+
+            compact_conversation(
+                conversation,
+                execution_result_records,
+                logger,
+                observability=observability,
+                turn_number=session.turn_number,
+                step_number=step + 1,
+            )
+
+            continue
 
         print(
             "\nSession ended by agent:"
@@ -2270,6 +2680,8 @@ for step in session.iter_steps(
             )
         )
 
+        executed_tool_actions_this_turn += 1
+
     else:
 
         tool_result = (
@@ -2281,6 +2693,8 @@ for step in session.iter_steps(
                 model_call_id=model_call_id,
             )
         )
+
+        executed_tool_actions_this_turn += 1
 
     print(
         "\nTool result:"

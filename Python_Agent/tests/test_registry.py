@@ -31,10 +31,21 @@ from agent.schemas import (
     DeleteNodeAction,
     DuplicateNodeAction,
     FindNodesAction,
+    CountNodesAction,
+    FindNodesByScriptAction,
+    FindNodesByGroupAction,
+    GetProjectSettingsAction,
+    ListAutoloadsAction,
+    GetEditorStateAction,
+    ListScenesInProjectAction,
+    GetUndoHistorySummaryAction,
     GetNodePropertiesAction,
     GetNodePropertyAction,
+    GetNodeClassInfoAction,
     GetSceneTreeAction,
     ListAvailableNodeTypesAction,
+    ListNodeSignalsAction,
+    ListNodeGroupsAction,
     RenameNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
@@ -51,8 +62,19 @@ CONTROL_ACTIONS = {"batch", "final_answer", "exit_session"}
 EXECUTABLE_ACTIONS = {
     "get_scene_tree",
     "find_nodes",
+    "count_nodes",
+    "find_nodes_by_script",
+    "find_nodes_by_group",
+    "get_project_settings",
+    "list_autoloads",
+    "get_editor_state",
+    "list_scenes_in_project",
+    "get_undo_history_summary",
     "get_node_properties",
     "get_node_property",
+    "get_node_class_info",
+    "list_node_signals",
+    "list_node_groups",
     "validate_node_type",
     "list_available_node_types",
     "describe_current_scene",
@@ -79,7 +101,18 @@ MUTATION_ACTIONS = {
 PREVIOUS_ACTION_REQUIREMENTS = {
     "get_scene_tree": (),
     "find_nodes": (),
+    "count_nodes": (),
+    "find_nodes_by_script": ("script_path",),
+    "find_nodes_by_group": ("group_name",),
+    "get_project_settings": (),
+    "list_autoloads": (),
+    "get_editor_state": (),
+    "list_scenes_in_project": (),
+    "get_undo_history_summary": (),
     "get_node_properties": ("node_path",),
+    "get_node_class_info": ("class_name",),
+    "list_node_signals": ("node_path",),
+    "list_node_groups": ("node_path",),
     "create_node": ("parent_path", "node_type", "node_name"),
     "rename_node": ("node_path", "new_name"),
     "delete_node": ("node_path",),
@@ -291,6 +324,62 @@ def test_get_node_property_is_read_only_and_not_in_boundary():
     assert "get_node_property" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
 
 
+def test_get_node_class_info_is_read_only_and_not_in_boundary():
+    """get_node_class_info is a read-only inspection action."""
+    spec = ACTION_REGISTRY["get_node_class_info"]
+    assert spec.is_mutation is False
+    assert "get_node_class_info" not in boundary._MUTATION_TARGET_KEYS
+    assert "get_node_class_info" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_list_node_signals_is_read_only_and_not_in_boundary():
+    """list_node_signals is a read-only inspection action."""
+    spec = ACTION_REGISTRY["list_node_signals"]
+    assert spec.is_mutation is False
+    assert "list_node_signals" not in boundary._MUTATION_TARGET_KEYS
+    assert "list_node_signals" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_list_node_groups_is_read_only_and_not_in_boundary():
+    """list_node_groups is a read-only inspection action."""
+    spec = ACTION_REGISTRY["list_node_groups"]
+    assert spec.is_mutation is False
+    assert "list_node_groups" not in boundary._MUTATION_TARGET_KEYS
+    assert "list_node_groups" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_count_nodes_is_read_only_and_not_in_boundary():
+    """count_nodes is a read-only inspection action."""
+    spec = ACTION_REGISTRY["count_nodes"]
+    assert spec.is_mutation is False
+    assert "count_nodes" not in boundary._MUTATION_TARGET_KEYS
+    assert "count_nodes" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_find_nodes_by_script_is_read_only_and_not_in_boundary():
+    """find_nodes_by_script is a read-only inspection action."""
+    spec = ACTION_REGISTRY["find_nodes_by_script"]
+    assert spec.is_mutation is False
+    assert "find_nodes_by_script" not in boundary._MUTATION_TARGET_KEYS
+    assert "find_nodes_by_script" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_find_nodes_by_group_is_read_only_and_not_in_boundary():
+    """find_nodes_by_group is a read-only inspection action."""
+    spec = ACTION_REGISTRY["find_nodes_by_group"]
+    assert spec.is_mutation is False
+    assert "find_nodes_by_group" not in boundary._MUTATION_TARGET_KEYS
+    assert "find_nodes_by_group" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_get_project_settings_is_read_only_and_not_in_boundary():
+    """get_project_settings is a read-only inspection action."""
+    spec = ACTION_REGISTRY["get_project_settings"]
+    assert spec.is_mutation is False
+    assert "get_project_settings" not in boundary._MUTATION_TARGET_KEYS
+    assert "get_project_settings" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
 def test_list_available_node_types_is_read_only_and_not_in_boundary():
     """ClassDB discovery is a batchable inspection action."""
     spec = ACTION_REGISTRY["list_available_node_types"]
@@ -357,6 +446,113 @@ DISPATCH_CASES = [
         },
     ),
     (
+        "count_nodes-defaults",
+        CountNodesAction(
+            reason="r", action="count_nodes", node_name="Enemy"
+        ),
+        "count_nodes",
+        {
+            "node_name": "Enemy",
+            "node_type": None,
+            "parent_path": None,
+            "name_match": "exact",
+        },
+    ),
+    (
+        "count_nodes-explicit",
+        CountNodesAction(
+            reason="r",
+            action="count_nodes",
+            node_type="Area2D",
+            parent_path="Level",
+            name_match="starts_with",
+        ),
+        "count_nodes",
+        {
+            "node_name": None,
+            "node_type": "Area2D",
+            "parent_path": "Level",
+            "name_match": "starts_with",
+        },
+    ),
+    (
+        "find_nodes_by_script",
+        FindNodesByScriptAction(
+            reason="r",
+            action="find_nodes_by_script",
+            script_path="res://scripts/player.gd",
+        ),
+        "find_nodes_by_script",
+        {"script_path": "res://scripts/player.gd"},
+    ),
+    (
+        "find_nodes_by_group",
+        FindNodesByGroupAction(
+            reason="r",
+            action="find_nodes_by_group",
+            group_name="enemies",
+        ),
+        "find_nodes_by_group",
+        {"group_name": "enemies"},
+    ),
+    (
+        "get_project_settings-names",
+        GetProjectSettingsAction(
+            reason="r",
+            action="get_project_settings",
+            setting_names=["display/window/size/viewport_width"],
+        ),
+        "get_project_settings",
+        {
+            "setting_names": ["display/window/size/viewport_width"],
+            "prefix": None,
+            "limit": None,
+        },
+    ),
+    (
+        "get_project_settings-prefix",
+        GetProjectSettingsAction(
+            reason="r",
+            action="get_project_settings",
+            prefix="display/window/size/",
+            limit=10,
+        ),
+        "get_project_settings",
+        {
+            "setting_names": None,
+            "prefix": "display/window/size/",
+            "limit": 10,
+        },
+    ),
+    (
+        "list_autoloads",
+        ListAutoloadsAction(reason="r", action="list_autoloads"),
+        "list_autoloads",
+        {},
+    ),
+    (
+        "get_editor_state",
+        GetEditorStateAction(reason="r", action="get_editor_state"),
+        "get_editor_state",
+        {},
+    ),
+    (
+        "list_scenes_in_project",
+        ListScenesInProjectAction(
+            reason="r", action="list_scenes_in_project"
+        ),
+        "list_scenes_in_project",
+        {},
+    ),
+    (
+        "get_undo_history_summary",
+        GetUndoHistorySummaryAction(
+            reason="r", action="get_undo_history_summary"
+        ),
+        "get_undo_history_summary",
+        {},
+    ),
+    (
         "get_node_properties",
         GetNodePropertiesAction(
             reason="r", action="get_node_properties", node_path="Player"
@@ -385,6 +581,16 @@ DISPATCH_CASES = [
         ),
         "get_node_property",
         {"node_path": "Player", "property_name": "name"},
+    ),
+    (
+        "get_node_class_info",
+        GetNodeClassInfoAction(
+            reason="r",
+            action="get_node_class_info",
+            class_name="Node2D",
+        ),
+        "get_node_class_info",
+        {"class_name": "Node2D"},
     ),
     (
         "list_available_node_types",
@@ -480,6 +686,26 @@ DISPATCH_CASES = [
         ),
         "validate_node_type",
         {"node_type": "Node2D"},
+    ),
+    (
+        "list_node_signals",
+        ListNodeSignalsAction(
+            reason="r",
+            action="list_node_signals",
+            node_path="Player",
+        ),
+        "list_node_signals",
+        {"node_path": "Player"},
+    ),
+    (
+        "list_node_groups",
+        ListNodeGroupsAction(
+            reason="r",
+            action="list_node_groups",
+            node_path="Player",
+        ),
+        "list_node_groups",
+        {"node_path": "Player"},
     ),
 ]
 

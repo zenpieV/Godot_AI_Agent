@@ -86,6 +86,7 @@ def safe_error_message(error: BaseException) -> str:
         "GEMINI_API_KEY",
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
+        "ZAI_API_KEY",
     ):
         secret = os.getenv(name)
         if secret:

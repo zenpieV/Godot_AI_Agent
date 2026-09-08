@@ -42,6 +42,39 @@ session termination, and Observability v1 telemetry in place, the
 project is entering an **Advanced Tools Expansion** phase focused on
 broadening editor operations and completing provider parity validation.
 
+## Inspection Tools Milestone
+
+The inspection surface is now complete at 17/17 tools:
+
+1. `get_scene_tree`
+2. `find_nodes`
+3. `get_node_properties`
+4. `get_node_property`
+5. `validate_node_type`
+6. `list_available_node_types`
+7. `get_node_class_info`
+8. `list_node_signals`
+9. `list_node_groups`
+10. `count_nodes`
+11. `find_nodes_by_script`
+12. `find_nodes_by_group`
+13. `get_project_settings`
+14. `list_autoloads`
+15. `get_editor_state`
+16. `list_scenes_in_project`
+17. `get_undo_history_summary`
+
+The final four are read-only and batchable. `list_autoloads` reads live
+`ProjectSettings`; the other three use editor-owned APIs injected by the
+plugin (`EditorInterface`, `EditorFileSystem`, and
+`EditorUndoRedoManager`). Normal headless scripts explicitly report editor
+state, filesystem, and undo-manager unavailability instead of fabricating
+values. Full editor-backed smoke validation requires an editor process with
+the plugin bridge available.
+
+Mutation tools remain the next architectural milestone. Screenshot support
+also remains deferred.
+
 ---
 
 # Recent Implementation: Hardening Slice 1
@@ -324,6 +357,69 @@ next advance raises `StopIteration`.
 
 ---
 
+# Bug Fix: Premature `exit_session` (Part 1: deterministic guard)
+
+A live stress test exposed a control-flow bug: for the request
+`delete omnitrix and end session`, Gemini returned only `exit_session`
+with `"Deleted 'Omnitrix' node and terminating the session as
+requested."` — no `delete_node` action was ever executed, and the
+session terminated anyway.
+
+## Root cause
+
+The main loop honored `exit_session` unconditionally. Because
+`exit_session` terminates the session, its free-text `exit_summary`
+was effectively treated as evidence that requested work had been done,
+letting the model substitute a bare exit for unperformed mutations.
+
+## Fix
+
+A deterministic Python-side guard in the main loop
+(`agent/godot_agent.py`):
+
+- The loop tracks how many tool actions were executed in the current
+  turn (`executed_tool_actions_this_turn`, reset at each turn start).
+- `exit_session` is honored only after at least one tool action has
+  actually executed in the current turn
+  (`exit_session_is_allowed()`).
+- When `exit_session` is proposed with zero executed tool actions,
+  the session is NOT terminated. The decision is rejected with a
+  tool-result-shaped observation
+  (`build_premature_exit_session_result()`), logged, appended to
+  conversation history like a validation failure, and the model is
+  asked to perform the requested work first (or reply with
+  `final_answer` and tell the user to type `/exit`).
+
+`/exit` remains the human-controlled host-level termination path and
+is unchanged. `exit_session` remains fully usable after real work has
+executed in the same turn.
+
+## Regression Tests
+
+- `test_exit_session_cannot_substitute_for_unexecuted_mutation` —
+  the exact live failure shape is rejected, never dispatches
+  `delete_node`, and the session stays open.
+- `test_valid_delete_node_then_exit_session_still_works` — a real
+  `delete_node` followed by `exit_session` still works.
+- `test_prompt_requires_work_before_exit_session` — the system prompt
+  requires requested work to be executed before `exit_session` and
+  forbids claiming unexecuted actions.
+
+## Remaining limitation
+
+The guard is a deterministically detectable invariant (at least one
+tool action executed in the current turn). It cannot prove that a
+multi-step user request is fully complete: a model could still perform
+only part of the work (or perform unrelated work), then legitimately
+terminate. Detecting true request completeness would require a
+natural-language intent parser, which is intentionally out of scope.
+The system prompt therefore also requires the model to execute all
+requested actions before `exit_session` and to never claim in
+`exit_summary` that any action was performed without a tool result
+proving it.
+
+---
+
 # Feature: Observability v1 Telemetry
 
 Observability v1 adds structured, in-memory session telemetry without
@@ -440,7 +536,7 @@ exact candidate for `validate_node_type` and, eventually, `create_node`.
 
 - Optional filters: `inherits_from` (a registered `Node` class) and
   case-insensitive `name_contains`.
-- Optional `limit`: 1ΓÇô100; the default is 50. Unfiltered requests are
+- Optional `limit`: 1–100; the default is 50. Unfiltered requests are
   allowed but are still bounded.
 - Results contain only sorted class names that inherit from `Node` and
   can be instantiated. They include `total_matches` and `truncated`, so
@@ -462,7 +558,212 @@ chosen candidate and `create_node` remains the only creation operation.
 
 ---
 
-# Feature: Tooling V3 ΓÇö `get_node_property` Action
+# Feature: `find_nodes_by_group` Action
+
+`find_nodes_by_group` is a read-only inspection action that returns
+the nodes in the currently edited scene that are members of the
+requested group, answered from each node's live group state
+(`Node.is_in_group()`).
+
+## Contract
+
+- Required field: `group_name` (str, non-empty). Matching is exact and
+  case-sensitive, preserving Godot's group-name identity. No fuzzy,
+  case-insensitive, wildcard, or regex matching.
+- Implemented by the shared `collect_matching_nodes` traversal used by
+  `find_nodes`/`find_nodes_by_script` (extended with an optional group
+  filter that defaults off), so traversal order and the node result
+  shape (`name`, `node_type`, `path`, `is_root`) are identical to
+  `find_nodes`. Returns `group_name`, `count`, and `nodes`; zero
+  matches are a successful empty result.
+- Missing/blank `group_name` returns the standard structured failure
+  form, passed through to the agent unchanged.
+- Registered in `agent/registry.py` as read-only and batchable; it is
+  not in `agent/boundary.py` mutation-target tracking. Routed at
+  `/find_nodes_by_group` through the standard bridge router.
+
+## Deliberate boundary
+
+This is group-membership inspection only: no group creation/removal,
+no project-wide group discovery, no multi-group boolean expressions,
+no group metadata, and no mutation of membership.
+
+---
+
+# Feature: `find_nodes_by_script` Action
+
+`find_nodes_by_script` is a read-only inspection action that returns
+the nodes in the currently edited scene whose attached script matches
+the requested script resource path, answered from each node's live
+`Node.get_script()` state.
+
+## Contract
+
+- Required field: `script_path` (str, non-empty). Matching is against
+  the canonical `res://` resource path of the attached script;
+  requests without the prefix are deterministically normalized by
+  prepending `res://`. Matching is exact; no fuzzy matching, regex,
+  or filesystem scanning.
+- Implemented by the shared `collect_matching_nodes` traversal used by
+  `find_nodes` (extended with an optional script filter that defaults
+  off), so traversal order and the node result shape
+  (`name`, `node_type`, `path`, `is_root`) are identical to
+  `find_nodes`. Returns `script_path` (normalized), `count`, and
+  `nodes`; zero matches are a successful empty result.
+- Missing/blank `script_path` returns the standard structured failure
+  form, passed through to the agent unchanged.
+- Registered in `agent/registry.py` as read-only and batchable; it is
+  not in `agent/boundary.py` mutation-target tracking. Routed at
+  `/find_nodes_by_script` through the standard bridge router.
+
+## Deliberate boundary
+
+This is script-attachment inspection only. No script editing, no
+inheritance analysis, no project-wide script discovery, and no
+mutation of attachments.
+
+---
+
+# Feature: `count_nodes` Action
+
+`count_nodes` is a read-only aggregate inspection action that counts
+nodes in the currently edited scene matching the same filter semantics
+as `find_nodes`, returning only the count. It supports deterministic
+aggregate verification ("how many enemies exist?") without retrieving
+node lists.
+
+## Contract
+
+- Optional filters, identical to `find_nodes`: `node_name`, `node_type`
+  (exact `get_class()` equality), `parent_path` (count this node's
+  subtree; must exist), and `name_match` (`exact` default, `contains`,
+  `starts_with`, `ends_with`, case-insensitive). No `include_root`
+  field; the scene root itself is never counted.
+- Implemented Godot-side by the shared `_parse_find_node_filters` +
+  `collect_matching_nodes` machinery used by `find_nodes`, so the two
+  tools cannot drift; `find_nodes` behavior is unchanged.
+- Success returns `count` (the established field name, matching
+  `find_nodes`), the applied filters, and never a node list. Zero
+  matches is a successful `count: 0`. Invalid `name_match` and missing
+  parents return the existing structured failures.
+- Registered in `agent/registry.py` as read-only and batchable; it is
+  not in `agent/boundary.py` mutation-target tracking. Routed at
+  `/count_nodes` through the standard bridge router.
+
+## Deliberate boundary
+
+The tool only reports authoritative scene state. It is a primitive for
+the observe → mutate → verify workflow; completion-declaration logic
+lives elsewhere. No generic query language, no extra filters, no
+screenshot or multimodal dependencies.
+
+
+# Feature: `get_project_settings` Action
+
+`get_project_settings` is a read-only project-configuration inspection
+action that reads specific settings from the live Godot `ProjectSettings`
+state. It never dumps the whole settings database: the agent must request
+exact setting names and/or a bounded prefix.
+
+## Contract
+
+- Optional filters, at least one required: `setting_names` (exact keys,
+  deduped, blanks dropped) and/or `prefix` (key begins-with, bounded).
+  Both may be combined as additive filters.
+- `limit` caps prefix results (1-100, default 50); exact-name matches are
+  never removed by the limit.
+- Implemented Godot-side from the live `ProjectSettings` runtime state
+  (`ProjectSettings.has_setting()`, `get_setting()`, and
+  `get_property_list()`); `project.godot` is never parsed manually.
+- Exact missing keys are reported in `missing`, not treated as a request
+  failure. Settings whose name contains a sensitive token (`password`,
+  `token`, `secret`, `api_key`, `credential`, `private_key`) are excluded:
+  only their names appear in `redacted`, never their values.
+- Prefix results are lexicographically sorted and include `total_matches`,
+  `returned_matches`, and `truncated` metadata.
+- Values are serialized through the project's shared
+  `ai_agent_variant_serializer.gd` to plain JSON-compatible values.
+- Registered in `agent/registry.py` as read-only and batchable; it is not
+  in `agent/boundary.py` mutation-target tracking. Routed at
+  `/get_project_settings` through the standard bridge router.
+
+## Deliberate boundary
+
+Reads only live `ProjectSettings` state; no project-setting mutation is
+provided. Sensitive-setting protection covers setting names only (values
+are never exposed). It is the project-level counterpart to the structural
+scene-inspection tools, not a bulk configuration dump. Completion-declaration
+logic does not belong to this tool.
+
+---
+
+---
+
+# Feature: `list_node_groups` Action
+
+`list_node_groups` is a read-only inspection action that reports the
+groups a single node in the currently edited scene is actually a member
+of, answered from the node's real instance state (`Node.get_groups()`).
+
+## Contract
+
+- Required field: `node_path` (str, non-empty, editor-relative; `"."` is
+  the scene root), resolved with the same helper as the other node
+  inspection tools.
+- The bridge returns `node_path`, `node_name`, `node_type`,
+  `total_groups`, and a deterministic, alphabetically sorted `groups`
+  list of plain strings. A node with no groups is a successful result
+  with an empty list.
+- Missing/blank `node_path` and nonexistent nodes return the standard
+  structured failure form, passed through to the agent unchanged.
+- Registered in `agent/registry.py` as read-only and batchable; it is
+  not in `agent/boundary.py` mutation-target tracking and is safe to
+  execute after an interrupted mutation batch. Routed at
+  `/list_node_groups` through the standard bridge router.
+
+## Deliberate boundary
+
+This is group-membership inspection only: it does not scan the scene
+tree, list project-wide groups, or expose group owners/definitions or
+any mutation of membership.
+
+---
+
+# Feature: `list_node_signals` Action
+
+`list_node_signals` is a read-only inspection action that lists the
+signals actually available on one node in the currently edited scene,
+answered from the node's real reflection data (`Node.get_signal_list()`),
+including built-in and inherited signals.
+
+## Contract
+
+- Required field: `node_path` (str, non-empty, editor-relative; `"."` is
+  the scene root), resolved with the same helper as the property tools.
+- The bridge returns `node_path`, `node_name`, `node_type`,
+  `total_signals`, and a deterministic, alphabetically sorted `signals`
+  list; each signal carries `name` and JSON-safe `args` entries with
+  `name`, `type`, and `type_id`.
+- Missing/blank `node_path` and nonexistent nodes return the standard
+  structured failure form, passed through to the agent unchanged.
+- Registered in `agent/registry.py` as read-only and batchable; it is
+  not in `agent/boundary.py` mutation-target tracking and is safe to
+  execute after an interrupted mutation batch. Routed at
+  `/list_node_signals` through the standard bridge router.
+
+## Deliberate boundary
+
+This is signal discovery only. It does not expose connection state,
+method lists, or any mutation capability. The original roadmap draft
+proposed an optional `include_connections` flag; it was intentionally
+not implemented. The final request contract is `node_path` only and the
+tool reports signal definitions, not connection state. Connection
+inspection can be considered separately later if a demonstrated need
+arises. This reduced contract is intentional, not a missing feature.
+
+---
+
+# Feature: Tooling V3 — `get_node_property` Action
 
 A new `get_node_property` action reads a single, already-known
 property of a single node, avoiding the overhead of re-requesting the
@@ -481,8 +782,8 @@ and is read-only, batchable, and side-effect-free.
 ## Provider contract
 
 - Provider: Godot bridge
-  (`agent/scene_tools.py` ΓåÆ `tools/scene_tools.py`
-  ΓåÆ `AIAgentPropertyTools.get_node_property_from_request`).
+  (`agent/scene_tools.py` → `tools/scene_tools.py`
+  → `AIAgentPropertyTools.get_node_property_from_request`).
 - Success returns the resolved node name, node type, property type /
   type id, `editable` flag, and the property value serialized via
   `AIAgentVariantSerializer` into a JSON-compatible structure.
@@ -911,6 +1212,23 @@ The goal is to reduce unnecessary retries while preserving generality.
 ---
 
 # Current Known Provider Warning
+
+## Gemini Response-Schema Compatibility Fix (Verified 2026-09-08)
+
+Gemini 3.1 Flash Lite initially returned `400 INVALID_ARGUMENT` for every
+agent request after the `count_nodes` action was added. The failure was not
+the Godot bridge or the standalone action schema. It occurred because the
+Gemini-normalized schema placed `CountNodesAction` inside the nested
+`batch.actions` union, where its filter shape overlapped `FindNodesAction`
+after Pydantic discriminator metadata was removed.
+
+The Gemini adapter now keeps `count_nodes` available as a normal top-level
+action but omits that branch from the provider-only nested batch union. The
+public Pydantic schema, registry, bridge endpoint, and tool behavior are
+unchanged. The provider adapter tests cover the normalized shape.
+
+Live verification on 2026-09-08 succeeded for both a project-settings request
+and a general tool-capabilities request using `gemini-3.1-flash-lite`.
 
 During Gemini-driven agent execution, the following warning has repeatedly appeared:
 

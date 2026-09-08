@@ -58,6 +58,35 @@ def test_gemini_maps_messages_schema_and_json_response(monkeypatch):
     assert "anyOf" in request["config"]["response_schema"]
 
 
+def test_gemini_disambiguates_count_nodes_schema():
+    from agent.schemas import AgentDecision
+    from pydantic import TypeAdapter
+
+    schema = gemini_provider.make_gemini_schema_compatible(
+        TypeAdapter(AgentDecision).json_schema()
+    )
+    schema_text = json.dumps(schema)
+
+    assert "CountNodesAction" in schema_text
+    assert "result_mode" in schema_text
+    assert "#/$defs/CountNodesAction" not in schema_text
+
+    batch_actions = schema["$defs"]["BatchAction"]["properties"][
+        "actions"
+    ]["items"]["anyOf"]
+    assert not any(
+        item.get("title")
+        in gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+        or item.get("$ref")
+        in {
+            "#/$defs/" + action_name
+            for action_name in
+            gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+        }
+        for item in batch_actions
+    )
+
+
 def test_gemini_retries_transient_errors_without_live_sdk(monkeypatch):
     transient = RuntimeError("transient")
     generate_content = Mock(

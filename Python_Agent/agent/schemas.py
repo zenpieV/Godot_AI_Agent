@@ -50,6 +50,52 @@ class FindNodesAction(BaseAction):
     include_root: Optional[bool] = None
 
 
+class CountNodesAction(BaseAction):
+
+    action: Literal["count_nodes"]
+
+    node_name: Optional[str] = None
+    node_type: Optional[str] = None
+
+    parent_path: Optional[str] = None
+
+    name_match: Optional[
+        Literal[
+            "exact",
+            "contains",
+            "starts_with",
+            "ends_with",
+        ]
+    ] = None
+
+
+class FindNodesByScriptAction(BaseAction):
+
+    action: Literal["find_nodes_by_script"]
+
+    script_path: str
+
+
+class FindNodesByGroupAction(BaseAction):
+
+    action: Literal["find_nodes_by_group"]
+
+    group_name: str
+
+
+class GetProjectSettingsAction(BaseAction):
+
+    action: Literal["get_project_settings"]
+
+    setting_names: Optional[list[str]] = None
+    prefix: Optional[str] = None
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+    )
+
+
 class GetNodePropertiesAction(BaseAction):
 
     action: Literal["get_node_properties"]
@@ -73,6 +119,28 @@ class ValidateNodeTypeAction(BaseAction):
     node_type: str
 
 
+
+class GetNodeClassInfoAction(BaseAction):
+
+    action: Literal["get_node_class_info"]
+
+    class_name: str = Field(min_length=1)
+
+
+class ListNodeSignalsAction(BaseAction):
+
+    action: Literal["list_node_signals"]
+
+    node_path: str
+
+
+class ListNodeGroupsAction(BaseAction):
+
+    action: Literal["list_node_groups"]
+
+    node_path: str
+
+
 class ListAvailableNodeTypesAction(BaseAction):
 
     action: Literal["list_available_node_types"]
@@ -86,6 +154,26 @@ class ListAvailableNodeTypesAction(BaseAction):
         ge=1,
         le=100,
     )
+
+
+class ListAutoloadsAction(BaseAction):
+
+    action: Literal["list_autoloads"]
+
+
+class GetEditorStateAction(BaseAction):
+
+    action: Literal["get_editor_state"]
+
+
+class ListScenesInProjectAction(BaseAction):
+
+    action: Literal["list_scenes_in_project"]
+
+
+class GetUndoHistorySummaryAction(BaseAction):
+
+    action: Literal["get_undo_history_summary"]
 
 
 # ==========================================
@@ -180,8 +268,19 @@ BatchableAction = Annotated[
     Union[
         GetSceneTreeAction,
         FindNodesAction,
+        CountNodesAction,
+        FindNodesByScriptAction,
+        FindNodesByGroupAction,
+        GetProjectSettingsAction,
+        ListAutoloadsAction,
+        GetEditorStateAction,
+        ListScenesInProjectAction,
+        GetUndoHistorySummaryAction,
         GetNodePropertiesAction,
         GetNodePropertyAction,
+        GetNodeClassInfoAction,
+        ListNodeSignalsAction,
+        ListNodeGroupsAction,
         ValidateNodeTypeAction,
         ListAvailableNodeTypesAction,
         CreateNodeAction,
@@ -247,8 +346,19 @@ AgentDecision = Annotated[
     Union[
         GetSceneTreeAction,
         FindNodesAction,
+        CountNodesAction,
+        FindNodesByScriptAction,
+        FindNodesByGroupAction,
+        GetProjectSettingsAction,
+        ListAutoloadsAction,
+        GetEditorStateAction,
+        ListScenesInProjectAction,
+        GetUndoHistorySummaryAction,
         GetNodePropertiesAction,
         GetNodePropertyAction,
+        GetNodeClassInfoAction,
+        ListNodeSignalsAction,
+        ListNodeGroupsAction,
         ValidateNodeTypeAction,
         ListAvailableNodeTypesAction,
         CreateNodeAction,

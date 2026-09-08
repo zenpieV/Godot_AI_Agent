@@ -6,6 +6,8 @@ MODEL_PROVIDER = "gemini"
 
 # MODEL_PROVIDER = "groq"
 
+# MODEL_PROVIDER = "zai"
+
 # MODEL_PROVIDER = "openrouter"
 
 # ==========================================
@@ -40,3 +42,9 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 OPENROUTER_MODEL = (
     "cohere/north-mini-code:free"
 )
+
+# ==========================================
+# Z.ai configuration
+# ==========================================
+
+ZAI_MODEL = "glm-4.7-flash"

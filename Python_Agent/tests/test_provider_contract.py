@@ -2,7 +2,7 @@ import builtins
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +12,7 @@ from agent.boundary import (
     compute_action_fingerprint,
     extract_mutation_target,
 )
+from agent import registry as registry_module
 from agent.schemas import (
     BatchAction,
     BatchableAction,
@@ -114,6 +115,112 @@ def test_malformed_missing_and_invalid_actions_are_rejected(
         agent_module.AGENT_DECISION_ADAPTER.validate_json(payload)
 
 
+def test_flattened_batch_actions_are_rejected_without_execution(
+    agent_module,
+    monkeypatch,
+):
+    """Regression: a flattened (non-object) batch "actions" array must
+    be rejected by validation, never repaired, and never executed.
+
+    Mirrors malformed Gemini output observed during live stress testing:
+    each action object was flattened into a list of alternating field
+    names and values. The live failure produced 25 string elements.
+    """
+    flattened_group = [
+        "rename_node",
+        "node_path",
+        "Negatrix/Heatblast/HP",
+        "new_name",
+        "Health-60",
+    ]
+    malformed_payload = {
+        "reason": "Stress-test flattened batch.",
+        "action": "batch",
+        "actions": flattened_group * 5,  # 25 elements, like the live failure
+    }
+
+    # Guard the execution boundary: if the malformed payload were ever
+    # accepted or "repaired", neither the batch executor nor a mutation
+    # tool handler may run.
+    monkeypatch.setattr(
+        agent_module,
+        "execute_batch_actions",
+        Mock(side_effect=AssertionError("malformed batch must not execute")),
+    )
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "rename_node",
+        Mock(side_effect=AssertionError("malformed batch must not execute")),
+    )
+
+    with pytest.raises(ValidationError, match="at most 5"):
+        agent_module.AGENT_DECISION_ADAPTER.validate_json(
+            json.dumps(malformed_payload)
+        )
+
+    # The malformed structure was not silently repaired or dispatched.
+    agent_module.execute_batch_actions.assert_not_called()
+    registry_module.scene_tools.rename_node.assert_not_called()
+
+
+def test_valid_multi_action_batch_executes_in_order(
+    agent_module,
+    monkeypatch,
+):
+    """A properly structured batch of two complete action objects
+    validates and executes both actions through the normal path."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Rename two nodes.",
+                "actions": [
+                    {
+                        "action": "rename_node",
+                        "reason": "Rename Heatblast HP.",
+                        "node_path": "Negatrix/Heatblast/HP",
+                        "new_name": "Health-60",
+                    },
+                    {
+                        "action": "rename_node",
+                        "reason": "Rename Heatblast Attack.",
+                        "node_path": "Negatrix/Heatblast/Attack",
+                        "new_name": "Attack-100",
+                    },
+                ],
+            }
+        )
+    )
+
+    assert isinstance(decision, BatchAction)
+    assert len(decision.actions) == 2
+
+    mock_rename = Mock(return_value={"success": True})
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "rename_node",
+        mock_rename,
+    )
+
+    result = agent_module.execute_batch_actions(
+        decision,
+        "Rename the two nodes.",
+        logging.getLogger("valid-batch-test"),
+    )
+
+    assert result["success"] is True
+    assert result["succeeded_count"] == 2
+    assert mock_rename.call_count == 2
+    assert mock_rename.call_args_list[0].kwargs == {
+        "node_path": "Negatrix/Heatblast/HP",
+        "new_name": "Health-60",
+    }
+    assert mock_rename.call_args_list[1].kwargs == {
+        "node_path": "Negatrix/Heatblast/Attack",
+        "new_name": "Attack-100",
+    }
+
+
 def test_invalid_action_arguments_are_rejected(agent_module):
     decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
         json.dumps(
@@ -130,6 +237,1704 @@ def test_invalid_action_arguments_are_rejected(agent_module):
 
     assert valid is False
     assert "valid serialized JSON" in error
+
+
+def test_validate_node_type_action_validates(agent_module):
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "validate_node_type",
+                "reason": "Check before creating.",
+                "node_type": "Node2D",
+            }
+        )
+    )
+
+    assert decision.action == "validate_node_type"
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is True
+    assert error == ""
+
+
+def test_validate_node_type_blank_node_type_is_rejected(agent_module):
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "validate_node_type",
+                "reason": "Blank type.",
+                "node_type": "   ",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): node_type" in error
+
+
+def test_validate_node_type_is_batchable():
+    """validate_node_type may appear as a batch item (read-only)."""
+    from pydantic import TypeAdapter
+
+    decision = TypeAdapter(BatchableAction).validate_json(
+        json.dumps(
+            {
+                "action": "validate_node_type",
+                "reason": "Pre-flight check inside a batch.",
+                "node_type": "CharacterBody2D",
+            }
+        )
+    )
+
+    assert decision.action == "validate_node_type"
+
+
+def test_list_available_node_types_action_validates(agent_module):
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_available_node_types",
+                "reason": "Discover Node2D candidates.",
+                "inherits_from": "Node2D",
+                "name_contains": "Body",
+                "limit": 10,
+            }
+        )
+    )
+
+    assert decision.action == "list_available_node_types"
+    assert decision.inherits_from == "Node2D"
+    assert decision.name_contains == "Body"
+    assert decision.limit == 10
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is True
+    assert error == ""
+
+
+def test_list_available_node_types_without_filters_validates(agent_module):
+    """The bridge supplies the bounded default when filters are omitted."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_available_node_types",
+                "reason": "Show a bounded set of node type candidates.",
+            }
+        )
+    )
+
+    assert decision.inherits_from is None
+    assert decision.name_contains is None
+    assert decision.limit is None
+    assert agent_module.validate_agent_action(decision) == (True, "")
+
+
+def test_list_available_node_types_limit_is_bounded_by_schema(agent_module):
+    with pytest.raises(ValidationError, match="less than or equal to 100"):
+        agent_module.AGENT_DECISION_ADAPTER.validate_json(
+            json.dumps(
+                {
+                    "action": "list_available_node_types",
+                    "reason": "Request too many names.",
+                    "limit": 101,
+                }
+            )
+        )
+
+
+def test_list_available_node_types_is_batchable():
+    from pydantic import TypeAdapter
+
+    decision = TypeAdapter(BatchableAction).validate_json(
+        json.dumps(
+            {
+                "action": "list_available_node_types",
+                "reason": "Discover candidates before creating.",
+                "name_contains": "Character",
+            }
+        )
+    )
+
+    assert decision.action == "list_available_node_types"
+
+
+def test_list_available_node_types_bridge_result_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """The registry preserves ClassDB filtering semantics verbatim."""
+    result_from_bridge = {
+        "success": True,
+        "action": "list_available_node_types",
+        "inherits_from": "Node2D",
+        "name_contains": "body",
+        "limit": 10,
+        "total_matches": 2,
+        "truncated": False,
+        "node_types": ["CharacterBody2D", "StaticBody2D"],
+    }
+    mock_list = Mock(return_value=result_from_bridge)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_available_node_types",
+        mock_list,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_available_node_types",
+                "reason": "Find body candidates under Node2D.",
+                "inherits_from": "Node2D",
+                "name_contains": "body",
+                "limit": 10,
+            }
+        )
+    )
+
+    assert agent_module._execute_single_action(decision) == result_from_bridge
+    mock_list.assert_called_once_with(
+        inherits_from="Node2D",
+        name_contains="body",
+        limit=10,
+    )
+
+
+def test_list_available_node_types_bridge_failures_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """No matches and invalid filters remain distinguishable results."""
+    no_matches = {
+        "success": True,
+        "action": "list_available_node_types",
+        "inherits_from": "",
+        "name_contains": "DefinitelyNotAType",
+        "limit": 50,
+        "total_matches": 0,
+        "truncated": False,
+        "node_types": [],
+    }
+    invalid_filter = {
+        "success": False,
+        "error": (
+            "Invalid inherits_from filter: MissingBase is not a "
+            "registered Godot class."
+        ),
+    }
+    mock_list = Mock(side_effect=[no_matches, invalid_filter])
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_available_node_types",
+        mock_list,
+    )
+
+    no_match_decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_available_node_types",
+                "reason": "Check whether the name exists.",
+                "name_contains": "DefinitelyNotAType",
+            }
+        )
+    )
+    invalid_filter_decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_available_node_types",
+                "reason": "Filter by the requested base class.",
+                "inherits_from": "MissingBase",
+            }
+        )
+    )
+
+    assert agent_module._execute_single_action(no_match_decision) == no_matches
+    assert (
+        agent_module._execute_single_action(invalid_filter_decision)
+        == invalid_filter
+    )
+
+
+def test_get_node_property_action_validates(agent_module):
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Read one property.",
+                "node_path": "Player",
+                "property_name": "position",
+            }
+        )
+    )
+
+    assert decision.action == "get_node_property"
+    assert decision.node_path == "Player"
+    assert decision.property_name == "position"
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is True
+    assert error == ""
+
+
+def test_get_node_property_blank_property_name_is_rejected(agent_module):
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Blank property.",
+                "node_path": "Player",
+                "property_name": "   ",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): property_name" in error
+
+
+def test_get_node_property_blank_node_path_is_rejected(agent_module):
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Blank path.",
+                "node_path": "   ",
+                "property_name": "position",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): node_path" in error
+
+
+def test_get_node_property_is_batchable():
+    """get_node_property may appear as a batch item (read-only)."""
+    from pydantic import TypeAdapter
+
+    decision = TypeAdapter(BatchableAction).validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Read two properties in one batch.",
+                "node_path": "Player",
+                "property_name": "visible",
+            }
+        )
+    )
+
+    assert decision.action == "get_node_property"
+
+
+def test_get_node_property_bridge_failure_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """A bridge failure (missing node / missing property) is returned
+    to the agent unchanged, with no tool execution and no exception
+    wrapping."""
+    from agent import registry as registry_module
+
+    failure = {
+        "success": False,
+        "error": "Property not found: health on node Player.",
+    }
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_node_property",
+        Mock(return_value=failure),
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Read missing property.",
+                "node_path": "Player",
+                "property_name": "health",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == failure
+
+
+def test_get_node_property_missing_node_failure_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """A missing-node bridge failure remains structured and unchanged."""
+    failure = {
+        "success": False,
+        "error": "Node not found: MissingPlayer",
+    }
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_node_property",
+        Mock(return_value=failure),
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Read a missing node.",
+                "node_path": "MissingPlayer",
+                "property_name": "position",
+            }
+        )
+    )
+
+    assert agent_module._execute_single_action(decision) == failure
+
+
+def test_get_node_property_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """A successful bridge response is returned to the agent with
+    the property value from the actual node serialized by Godot."""
+    from agent import registry as registry_module
+
+    success = {
+        "success": True,
+        "action": "get_node_property",
+        "node_path": "Player",
+        "node_name": "Player",
+        "node_type": "CharacterBody2D",
+        "property_name": "position",
+        "property_type": "Vector2",
+        "property_type_id": 5,
+        "editable": True,
+        "value": {"type": "Vector2", "x": 100.0, "y": 200.0},
+    }
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_node_property",
+        Mock(return_value=success),
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Read one property.",
+                "node_path": "Player",
+                "property_name": "position",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result["success"] is True
+    assert result["property_name"] == "position"
+    assert result["value"] == {"type": "Vector2", "x": 100.0, "y": 200.0}
+
+
+def test_get_node_property_name_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Node.name has a scalar StringName result and stays read-only."""
+    success = {
+        "success": True,
+        "action": "get_node_property",
+        "node_path": "Player",
+        "node_name": "Player",
+        "node_type": "CharacterBody2D",
+        "property_name": "name",
+        "property_type": "StringName",
+        "property_type_id": 21,
+        "editable": False,
+        "value": "Player",
+    }
+    mock_property = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_node_property",
+        mock_property,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_property",
+                "reason": "Read the special Node name attribute.",
+                "node_path": "Player",
+                "property_name": "name",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_property.assert_called_once_with(
+        node_path="Player",
+        property_name="name",
+    )
+
+
+def test_get_node_class_info_action_validates(agent_module):
+    """get_node_class_info accepts a class_name and validates."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_class_info",
+                "reason": "Inspect the Node2D class.",
+                "class_name": "Node2D",
+            }
+        )
+    )
+    assert decision.action == "get_node_class_info"
+    assert decision.class_name == "Node2D"
+
+
+def test_get_node_class_info_blank_class_name_is_rejected(agent_module):
+    """Blank class_name fails Pydantic validation."""
+    with pytest.raises(ValidationError):
+        agent_module.AGENT_DECISION_ADAPTER.validate_json(
+            json.dumps(
+                {
+                    "action": "get_node_class_info",
+                    "reason": "Inspect a class.",
+                    "class_name": "",
+                }
+            )
+        )
+
+
+def test_get_node_class_info_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge result for a valid class passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "get_node_class_info",
+        "class_name": "Node2D",
+        "base_class": "CanvasItem",
+        "can_instantiate": True,
+    }
+    mock_info = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_node_class_info",
+        mock_info,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_class_info",
+                "reason": "Inspect Node2D.",
+                "class_name": "Node2D",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_info.assert_called_once_with(
+        class_name="Node2D",
+    )
+
+
+def test_get_node_class_info_unknown_class_failure_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge error for an unknown class passes through unchanged."""
+    failure = {
+        "success": False,
+        "error": "'NotARealClass' is not a registered Godot class.",
+    }
+    mock_info = Mock(return_value=failure)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_node_class_info",
+        mock_info,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_node_class_info",
+                "reason": "Inspect an unknown class.",
+                "class_name": "NotARealClass",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == failure
+    mock_info.assert_called_once_with(
+        class_name="NotARealClass",
+    )
+
+
+def test_get_node_class_info_is_batchable(agent_module):
+    """get_node_class_info is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect two classes.",
+                "actions": [
+                    {
+                        "action": "get_node_class_info",
+                        "reason": "Inspect Node2D.",
+                        "class_name": "Node2D",
+                    },
+                    {
+                        "action": "get_node_class_info",
+                        "reason": "Inspect Node3D.",
+                        "class_name": "Node3D",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "get_node_class_info"
+        for item in batch.actions
+    )
+
+
+def test_list_node_signals_action_validates(agent_module):
+    """list_node_signals accepts a node_path and validates."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_signals",
+                "reason": "Inspect the signals on Player.",
+                "node_path": "Player",
+            }
+        )
+    )
+    assert decision.action == "list_node_signals"
+    assert decision.node_path == "Player"
+
+
+def test_list_node_signals_missing_node_path_is_rejected(agent_module):
+    """A missing/blank node_path fails required-field validation."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_signals",
+                "reason": "Blank path.",
+                "node_path": "   ",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): node_path" in error
+
+
+def test_list_node_signals_registry_dispatch_resolves(agent_module, monkeypatch):
+    """The registry dispatches list_node_signals with its node_path."""
+    mock_signals = Mock(return_value={"success": True})
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_node_signals",
+        mock_signals,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_signals",
+                "reason": "Inspect signals.",
+                "node_path": "Player",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == {"success": True}
+    mock_signals.assert_called_once_with(node_path="Player")
+
+
+def test_list_node_signals_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge result for a valid node passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "list_node_signals",
+        "node_path": "Player",
+        "node_name": "Player",
+        "node_type": "Area2D",
+        "total_signals": 2,
+        "signals": [
+            {
+                "name": "area_entered",
+                "args": [
+                    {"name": "area", "type": "Object", "type_id": 24}
+                ],
+            },
+            {
+                "name": "tree_entered",
+                "args": [],
+            },
+        ],
+    }
+    mock_signals = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_node_signals",
+        mock_signals,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_signals",
+                "reason": "Inspect Player signals.",
+                "node_path": "Player",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_signals.assert_called_once_with(node_path="Player")
+
+
+def test_list_node_signals_missing_node_failure_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """A missing-node bridge failure remains structured and unchanged."""
+    failure = {
+        "success": False,
+        "error": "Node not found: MissingPlayer",
+    }
+    mock_signals = Mock(return_value=failure)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_node_signals",
+        mock_signals,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_signals",
+                "reason": "Inspect a missing node.",
+                "node_path": "MissingPlayer",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == failure
+    mock_signals.assert_called_once_with(node_path="MissingPlayer")
+
+
+def test_list_node_signals_is_batchable(agent_module):
+    """list_node_signals is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect signals on two nodes.",
+                "actions": [
+                    {
+                        "action": "list_node_signals",
+                        "reason": "Inspect Player signals.",
+                        "node_path": "Player",
+                    },
+                    {
+                        "action": "list_node_signals",
+                        "reason": "Inspect root signals.",
+                        "node_path": ".",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "list_node_signals"
+        for item in batch.actions
+    )
+
+
+def test_list_node_groups_action_validates(agent_module):
+    """list_node_groups accepts a node_path and validates."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_groups",
+                "reason": "Inspect the groups on Player.",
+                "node_path": "Player",
+            }
+        )
+    )
+    assert decision.action == "list_node_groups"
+    assert decision.node_path == "Player"
+
+
+def test_list_node_groups_missing_node_path_is_rejected(agent_module):
+    """A missing/blank node_path fails required-field validation."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_groups",
+                "reason": "Blank path.",
+                "node_path": "   ",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): node_path" in error
+
+
+def test_list_node_groups_registry_dispatch_resolves(agent_module, monkeypatch):
+    """The registry dispatches list_node_groups with its node_path."""
+    mock_groups = Mock(return_value={"success": True})
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_node_groups",
+        mock_groups,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_groups",
+                "reason": "Inspect groups.",
+                "node_path": "Player",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == {"success": True}
+    mock_groups.assert_called_once_with(node_path="Player")
+
+
+def test_list_node_groups_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge result for a valid node passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "list_node_groups",
+        "node_path": "Player",
+        "node_name": "Player",
+        "node_type": "CharacterBody2D",
+        "total_groups": 2,
+        "groups": ["characters", "players"],
+    }
+    mock_groups = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_node_groups",
+        mock_groups,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_groups",
+                "reason": "Inspect Player groups.",
+                "node_path": "Player",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_groups.assert_called_once_with(node_path="Player")
+
+
+def test_list_node_groups_missing_node_failure_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """A missing-node bridge failure remains structured and unchanged."""
+    failure = {
+        "success": False,
+        "error": "Node not found: MissingPlayer",
+    }
+    mock_groups = Mock(return_value=failure)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "list_node_groups",
+        mock_groups,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "list_node_groups",
+                "reason": "Inspect a missing node.",
+                "node_path": "MissingPlayer",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == failure
+    mock_groups.assert_called_once_with(node_path="MissingPlayer")
+
+
+def test_list_node_groups_is_batchable(agent_module):
+    """list_node_groups is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect groups on two nodes.",
+                "actions": [
+                    {
+                        "action": "list_node_groups",
+                        "reason": "Inspect Player groups.",
+                        "node_path": "Player",
+                    },
+                    {
+                        "action": "list_node_groups",
+                        "reason": "Inspect root groups.",
+                        "node_path": ".",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "list_node_groups"
+        for item in batch.actions
+    )
+
+
+def test_count_nodes_action_validates(agent_module):
+    """count_nodes accepts a minimal request."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "count_nodes",
+                "reason": "Count the enemies.",
+                "node_name": "Enemy",
+            }
+        )
+    )
+    assert decision.action == "count_nodes"
+    assert decision.node_name == "Enemy"
+
+
+def test_count_nodes_accepts_all_supported_filters(agent_module):
+    """count_nodes accepts the full shared filter shape."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "count_nodes",
+                "reason": "Count triggers.",
+                "node_name": "Trigger",
+                "node_type": "Area2D",
+                "parent_path": "Level",
+                "name_match": "starts_with",
+            }
+        )
+    )
+    assert decision.node_type == "Area2D"
+    assert decision.parent_path == "Level"
+    assert decision.name_match == "starts_with"
+
+
+def test_count_nodes_rejects_unsupported_name_match(agent_module):
+    """An unsupported name_match mode fails Pydantic validation."""
+    with pytest.raises(ValidationError):
+        agent_module.AGENT_DECISION_ADAPTER.validate_json(
+            json.dumps(
+                {
+                    "action": "count_nodes",
+                    "reason": "Bad mode.",
+                    "node_name": "Enemy",
+                    "name_match": "regex",
+                }
+            )
+        )
+
+
+def test_count_nodes_registry_dispatch_resolves(agent_module, monkeypatch):
+    """The registry dispatches count_nodes with the shared filters."""
+    mock_count = Mock(return_value={"success": True, "count": 1})
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "count_nodes",
+        mock_count,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "count_nodes",
+                "reason": "Count enemies.",
+                "node_name": "Enemy",
+                "node_type": "Area2D",
+                "parent_path": "Level",
+                "name_match": "contains",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == {"success": True, "count": 1}
+    mock_count.assert_called_once_with(
+        node_name="Enemy",
+        node_type="Area2D",
+        parent_path="Level",
+        name_match="contains",
+    )
+
+
+def test_count_nodes_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge count result passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "count_nodes",
+        "count": 5,
+        "node_name_filter": "Enemy",
+        "node_type_filter": "Area2D",
+        "parent_path_filter": "Level",
+        "name_match": "exact",
+    }
+    mock_count = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "count_nodes",
+        mock_count,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "count_nodes",
+                "reason": "Count enemies.",
+                "node_name": "Enemy",
+                "node_type": "Area2D",
+                "parent_path": "Level",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_count.assert_called_once_with(
+        node_name="Enemy",
+        node_type="Area2D",
+        parent_path="Level",
+        name_match="exact",
+    )
+
+
+def test_count_nodes_missing_parent_failure_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """A missing-parent bridge failure remains structured and unchanged."""
+    failure = {
+        "success": False,
+        "error": "Parent node not found: MissingLevel. "
+        "Node not found: MissingLevel",
+    }
+    mock_count = Mock(return_value=failure)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "count_nodes",
+        mock_count,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "count_nodes",
+                "reason": "Count under a missing parent.",
+                "parent_path": "MissingLevel",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == failure
+    mock_count.assert_called_once_with(
+        node_name=None,
+        node_type=None,
+        parent_path="MissingLevel",
+        name_match="exact",
+    )
+
+
+def test_count_nodes_is_batchable(agent_module):
+    """count_nodes is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Count two kinds of nodes.",
+                "actions": [
+                    {
+                        "action": "count_nodes",
+                        "reason": "Count enemies.",
+                        "node_name": "Enemy",
+                    },
+                    {
+                        "action": "count_nodes",
+                        "reason": "Count triggers.",
+                        "node_type": "Area2D",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "count_nodes"
+        for item in batch.actions
+    )
+
+
+def test_find_nodes_by_script_action_validates(agent_module):
+    """find_nodes_by_script accepts a script_path and validates."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_script",
+                "reason": "Find nodes using player.gd.",
+                "script_path": "res://scripts/player.gd",
+            }
+        )
+    )
+    assert decision.action == "find_nodes_by_script"
+    assert decision.script_path == "res://scripts/player.gd"
+
+
+def test_find_nodes_by_script_blank_script_path_is_rejected(agent_module):
+    """A blank script_path fails required-field validation."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_script",
+                "reason": "Blank path.",
+                "script_path": "   ",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): script_path" in error
+
+
+def test_find_nodes_by_script_registry_dispatch_resolves(
+    agent_module,
+    monkeypatch,
+):
+    """The registry dispatches find_nodes_by_script with its script_path."""
+    mock_find = Mock(return_value={"success": True, "count": 0})
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "find_nodes_by_script",
+        mock_find,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_script",
+                "reason": "Find scripted nodes.",
+                "script_path": "res://scripts/enemy.gd",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == {"success": True, "count": 0}
+    mock_find.assert_called_once_with(
+        script_path="res://scripts/enemy.gd"
+    )
+
+
+def test_find_nodes_by_script_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge result for a matching script passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "find_nodes_by_script",
+        "script_path": "res://scripts/player.gd",
+        "count": 2,
+        "nodes": [
+            {
+                "name": "Player",
+                "node_type": "CharacterBody2D",
+                "path": "Player",
+                "is_root": False,
+            },
+            {
+                "name": "Player2",
+                "node_type": "CharacterBody2D",
+                "path": "Player2",
+                "is_root": False,
+            },
+        ],
+    }
+    mock_find = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "find_nodes_by_script",
+        mock_find,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_script",
+                "reason": "Find player script users.",
+                "script_path": "res://scripts/player.gd",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_find.assert_called_once_with(
+        script_path="res://scripts/player.gd"
+    )
+
+
+def test_find_nodes_by_script_zero_match_is_not_an_error(
+    agent_module,
+    monkeypatch,
+):
+    """A zero-match bridge result passes through as success."""
+    zero = {
+        "success": True,
+        "action": "find_nodes_by_script",
+        "script_path": "res://scripts/nobody.gd",
+        "count": 0,
+        "nodes": [],
+    }
+    mock_find = Mock(return_value=zero)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "find_nodes_by_script",
+        mock_find,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_script",
+                "reason": "Look for an unused script.",
+                "script_path": "res://scripts/nobody.gd",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == zero
+    assert result["count"] == 0
+
+
+def test_find_nodes_by_script_is_batchable(agent_module):
+    """find_nodes_by_script is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect two scripts.",
+                "actions": [
+                    {
+                        "action": "find_nodes_by_script",
+                        "reason": "Find player.gd users.",
+                        "script_path": "res://scripts/player.gd",
+                    },
+                    {
+                        "action": "find_nodes_by_script",
+                        "reason": "Find enemy.gd users.",
+                        "script_path": "enemy.gd",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "find_nodes_by_script"
+        for item in batch.actions
+    )
+
+
+def test_find_nodes_by_group_action_validates(agent_module):
+    """find_nodes_by_group accepts a group_name and validates."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_group",
+                "reason": "Find nodes in the enemies group.",
+                "group_name": "enemies",
+            }
+        )
+    )
+    assert decision.action == "find_nodes_by_group"
+    assert decision.group_name == "enemies"
+
+
+def test_find_nodes_by_group_blank_group_name_is_rejected(agent_module):
+    """A blank group_name fails required-field validation."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_group",
+                "reason": "Blank group.",
+                "group_name": "   ",
+            }
+        )
+    )
+
+    valid, error = agent_module.validate_agent_action(decision)
+
+    assert valid is False
+    assert "requires non-empty field(s): group_name" in error
+
+
+def test_find_nodes_by_group_registry_dispatch_resolves(
+    agent_module,
+    monkeypatch,
+):
+    """The registry dispatches find_nodes_by_group with its group_name."""
+    mock_find = Mock(return_value={"success": True, "count": 0})
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "find_nodes_by_group",
+        mock_find,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_group",
+                "reason": "Find group members.",
+                "group_name": "hostile",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == {"success": True, "count": 0}
+    mock_find.assert_called_once_with(group_name="hostile")
+
+
+def test_find_nodes_by_group_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge result for a matching group passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "find_nodes_by_group",
+        "group_name": "enemies",
+        "count": 2,
+        "nodes": [
+            {
+                "name": "Enemy",
+                "node_type": "Area2D",
+                "path": "Enemy",
+                "is_root": False,
+            },
+            {
+                "name": "Enemy2",
+                "node_type": "Area2D",
+                "path": "Enemy2",
+                "is_root": False,
+            },
+        ],
+    }
+    mock_find = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "find_nodes_by_group",
+        mock_find,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_group",
+                "reason": "Find enemies group members.",
+                "group_name": "enemies",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_find.assert_called_once_with(group_name="enemies")
+
+
+def test_find_nodes_by_group_zero_match_is_not_an_error(
+    agent_module,
+    monkeypatch,
+):
+    """A zero-match bridge result passes through as success."""
+    zero = {
+        "success": True,
+        "action": "find_nodes_by_group",
+        "group_name": "empty_group",
+        "count": 0,
+        "nodes": [],
+    }
+    mock_find = Mock(return_value=zero)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "find_nodes_by_group",
+        mock_find,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "find_nodes_by_group",
+                "reason": "Look for an unused group.",
+                "group_name": "empty_group",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == zero
+    assert result["count"] == 0
+
+
+def test_find_nodes_by_group_is_batchable(agent_module):
+    """find_nodes_by_group is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect two groups.",
+                "actions": [
+                    {
+                        "action": "find_nodes_by_group",
+                        "reason": "Find enemies group members.",
+                        "group_name": "enemies",
+                    },
+                    {
+                        "action": "find_nodes_by_group",
+                        "reason": "Find players group members.",
+                        "group_name": "players",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "find_nodes_by_group"
+        for item in batch.actions
+    )
+
+
+def test_get_project_settings_names_validates(agent_module):
+    """get_project_settings accepts exact setting_names."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_project_settings",
+                "reason": "Inspect window size.",
+                "setting_names": [
+                    "display/window/size/viewport_width",
+                    "display/window/size/viewport_height",
+                ],
+            }
+        )
+    )
+    assert decision.action == "get_project_settings"
+    assert decision.setting_names == [
+        "display/window/size/viewport_width",
+        "display/window/size/viewport_height",
+    ]
+    assert decision.prefix is None
+
+
+def test_get_project_settings_prefix_validates(agent_module):
+    """get_project_settings accepts a prefix and optional limit."""
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_project_settings",
+                "reason": "Inspect window settings.",
+                "prefix": "display/window/size/",
+                "limit": 5,
+            }
+        )
+    )
+    assert decision.prefix == "display/window/size/"
+    assert decision.limit == 5
+
+
+def test_get_project_settings_invalid_limit_is_rejected(agent_module):
+    """A limit outside 1-100 fails Pydantic validation."""
+    with pytest.raises(ValidationError):
+        agent_module.AGENT_DECISION_ADAPTER.validate_json(
+            json.dumps(
+                {
+                    "action": "get_project_settings",
+                    "reason": "Bad limit.",
+                    "prefix": "display/",
+                    "limit": 5000,
+                }
+            )
+        )
+
+
+def test_get_project_settings_bridge_success_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge result for exact names passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "get_project_settings",
+        "setting_names": [
+            "display/window/size/viewport_width",
+            "display/window/size/viewport_height",
+        ],
+        "prefix": "",
+        "settings": {
+            "display/window/size/viewport_width": 1280,
+            "display/window/size/viewport_height": 720,
+        },
+        "missing": ["definitely/not/a/setting"],
+        "redacted": [],
+    }
+    mock_get = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_project_settings",
+        mock_get,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_project_settings",
+                "reason": "Inspect window size.",
+                "setting_names": [
+                    "display/window/size/viewport_width",
+                    "display/window/size/viewport_height",
+                    "definitely/not/a/setting",
+                ],
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    mock_get.assert_called_once_with(
+        setting_names=[
+            "display/window/size/viewport_width",
+            "display/window/size/viewport_height",
+            "definitely/not/a/setting",
+        ],
+        prefix=None,
+        limit=None,
+    )
+
+
+def test_get_project_settings_prefix_metadata_passthrough(
+    agent_module,
+    monkeypatch,
+):
+    """Bridge prefix result metadata passes through unchanged."""
+    success = {
+        "success": True,
+        "action": "get_project_settings",
+        "setting_names": [],
+        "prefix": "display/window/size/",
+        "settings": {
+            "display/window/size/viewport_width": 1280,
+            "display/window/size/viewport_height": 720,
+        },
+        "missing": [],
+        "redacted": [],
+        "total_matches": 8,
+        "returned_matches": 8,
+        "truncated": False,
+    }
+    mock_get = Mock(return_value=success)
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "get_project_settings",
+        mock_get,
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "get_project_settings",
+                "reason": "Inspect window size.",
+                "prefix": "display/window/size/",
+            }
+        )
+    )
+
+    result = agent_module._execute_single_action(decision)
+
+    assert result == success
+    assert result["truncated"] is False
+
+
+def test_get_project_settings_is_batchable(agent_module):
+    """get_project_settings is a valid batch member."""
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect two settings.",
+                "actions": [
+                    {
+                        "action": "get_project_settings",
+                        "reason": "Inspect renderer.",
+                        "setting_names": ["rendering/renderer/rendering_method"],
+                    },
+                    {
+                        "action": "get_project_settings",
+                        "reason": "Inspect window size.",
+                        "prefix": "display/window/size/",
+                    },
+                ],
+            }
+        )
+    )
+    assert batch.action == "batch"
+    assert len(batch.actions) == 2
+    assert all(
+        item.action == "get_project_settings"
+        for item in batch.actions
+    )
+
+
+@pytest.mark.parametrize(
+    "action_name",
+    [
+        "list_autoloads",
+        "get_editor_state",
+        "list_scenes_in_project",
+        "get_undo_history_summary",
+    ],
+)
+def test_project_inspection_actions_validate_and_are_batchable(
+    agent_module,
+    action_name,
+):
+    payload = {
+        "action": action_name,
+        "reason": "Inspect the project.",
+    }
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(payload)
+    )
+    assert decision.action == action_name
+    assert agent_module.validate_agent_action(decision) == (True, "")
+
+    batch = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Inspect project state.",
+                "actions": [payload],
+            }
+        )
+    )
+    assert batch.actions[0].action == action_name
+
+
+@pytest.mark.parametrize(
+    "action_name",
+    [
+        "list_autoloads",
+        "get_editor_state",
+        "list_scenes_in_project",
+        "get_undo_history_summary",
+    ],
+)
+def test_project_inspection_bridge_success_and_failure_passthrough(
+    agent_module,
+    monkeypatch,
+    action_name,
+):
+    success = {"success": True, "action": action_name}
+    failure = {"success": False, "action": action_name, "error": "unavailable"}
+    mock_tool = Mock(side_effect=[success, failure])
+    monkeypatch.setattr(registry_module.scene_tools, action_name, mock_tool)
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": action_name,
+                "reason": "Inspect project state.",
+            }
+        )
+    )
+
+    assert agent_module._execute_single_action(decision) == success
+    assert agent_module._execute_single_action(decision) == failure
+    mock_tool.assert_has_calls([call(), call()])
 
 
 def test_nested_parameters_normalize_then_validate(agent_module):
@@ -219,6 +2024,22 @@ def test_tool_result_continuation_and_multi_step_decisions(agent_module, monkeyp
     assert provider.call_args_list[1].kwargs["conversation"][-1]["role"] == "tool"
 
 
+def test_zai_provider_selected_through_ask_model(agent_module, monkeypatch):
+    captured = {}
+
+    def fake_ask_zai(**kwargs):
+        captured["conversation"] = kwargs["conversation"]
+        return ProviderResult(text='{"action":"final_answer"}')
+
+    monkeypatch.setattr(agent_module, "MODEL_PROVIDER", "zai")
+    monkeypatch.setattr(agent_module, "ask_zai", fake_ask_zai)
+
+    result = agent_module.ask_model([])
+
+    assert result == '{"action":"final_answer"}'
+    assert captured["conversation"] == []
+
+
 def test_agent_session_keeps_state_across_user_turns(agent_module, monkeypatch):
     conversation = [
         {"role": "system", "content": "system"},
@@ -253,8 +2074,36 @@ def test_agent_session_keeps_state_across_user_turns(agent_module, monkeypatch):
     assert len(session.blocked_skipped_actions) == 1
     assert conversation[-1]["role"] == "user"
     assert "second turn" in conversation[-1]["content"]
+    assert "BEGIN ACTIVE USER TURN 2" in conversation[-1]["content"]
+    assert "do not repeat or re-answer" in conversation[-1]["content"]
 
     session.closed = True
+
+
+def test_completed_final_answer_is_marked_as_historical_context(
+    agent_module,
+):
+    conversation = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "first turn"},
+    ]
+    session = agent_module.AgentSession(
+        conversation,
+        logging.getLogger("agent-session-history-test"),
+        "first turn",
+    )
+    from agent.schemas import FinalAnswerAction
+
+    final_decision = FinalAnswerAction(
+        reason="Finished the request.",
+        action="final_answer",
+        final_answer="Created Player.",
+    )
+
+    session.complete_turn(final_decision)
+
+    assert "Created Player." in conversation[-2]["content"]
+    assert "historical context only" in conversation[-1]["content"]
 
 
 def test_agent_session_termination_preserves_state(agent_module):
@@ -536,6 +2385,141 @@ def test_exit_command_still_terminates(agent_module, monkeypatch):
 
     assert session.begin_next_turn() is False
     assert session.closed is True
+
+
+def test_exit_session_cannot_substitute_for_unexecuted_mutation(
+    agent_module,
+    monkeypatch,
+):
+    """Regression: a bare exit_session that claims a deletion (or any
+    other work) must not terminate the session nor execute anything.
+
+    Mirrors the live failure where Gemini returned ONLY exit_session
+    with "Deleted 'Omnitrix' node and terminating the session as
+    requested." and no delete_node action ever ran.
+    """
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "exit_session",
+                "reason": "deleting node and ending session",
+                "exit_summary": (
+                    "Deleted 'Omnitrix' node and terminating "
+                    "the session as requested."
+                ),
+            }
+        )
+    )
+    assert decision.action == "exit_session"
+
+    # exit_session is a pure termination decision: it must never
+    # dispatch to any tool handler.
+    mock_delete = Mock(
+        side_effect=AssertionError(
+            "exit_session must not call delete_node"
+        )
+    )
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "delete_node",
+        mock_delete,
+    )
+
+    dispatched = agent_module._execute_single_action(decision)
+
+    assert dispatched["success"] is False
+    mock_delete.assert_not_called()
+
+    # Deterministic guard: with no executed tool action in the
+    # current turn, exit_session is rejected and the session stays
+    # open for the model to perform the actual work.
+    assert agent_module.exit_session_is_allowed(0) is False
+
+    guard_result = agent_module.build_premature_exit_session_result()
+
+    assert guard_result["success"] is False
+    assert guard_result["action"] == "exit_session"
+    assert "cannot substitute" in guard_result["validation_error"]
+    assert (
+        "no tool action has been executed in this turn"
+        in guard_result["validation_error"]
+    )
+
+    session = agent_module.AgentSession(
+        [{"role": "user", "content": "delete omnitrix and end session"}],
+        logging.getLogger("exit-session-guard-test"),
+        "delete omnitrix and end session",
+    )
+    assert session.closed is False
+
+
+def test_valid_delete_node_then_exit_session_still_works(
+    agent_module,
+    monkeypatch,
+):
+    """A real delete_node followed by exit_session still works.
+
+    Once the requested mutation has actually executed, exit_session
+    is allowed and terminates the session normally.
+    """
+    delete_decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "delete_node",
+                "reason": "Delete the requested node.",
+                "node_path": "Omnitrix",
+            }
+        )
+    )
+    mock_delete = Mock(
+        return_value={
+            "success": True,
+            "action": "delete_node",
+            "undoable": True,
+        }
+    )
+    monkeypatch.setattr(
+        registry_module.scene_tools,
+        "delete_node",
+        mock_delete,
+    )
+
+    result = agent_module.execute_single_action(delete_decision)
+
+    assert result["success"] is True
+    mock_delete.assert_called_once_with(node_path="Omnitrix")
+
+    # After real work executed, the guard allows exit_session and the
+    # session terminates normally via session.terminate(), unchanged.
+    assert agent_module.exit_session_is_allowed(1) is True
+    assert agent_module.exit_session_is_allowed(5) is True
+
+    session = agent_module.AgentSession(
+        [{"role": "user", "content": "delete omnitrix and end session"}],
+        logging.getLogger("exit-session-after-work-test"),
+        "delete omnitrix and end session",
+    )
+    session.terminate()
+    assert session.closed is True
+
+
+def test_prompt_requires_work_before_exit_session(agent_module):
+    """The system prompt must tell the model to execute requested
+    work before exit_session and to never claim unexecuted actions."""
+    system_prompt = agent_module.conversation[0]["content"]
+
+    assert (
+        "exit_session performs NO tool work itself"
+        in system_prompt
+    )
+    assert (
+        "substitute for requested work"
+        in system_prompt
+    )
+    assert (
+        "Never claim in exit_summary that any tool action was"
+        in system_prompt
+    )
 
 
 def test_exit_session_preserves_session_state(agent_module):

@@ -6,16 +6,20 @@ class_name AIAgentRouter
 
 var node_tools: AIAgentNodeTools
 var property_tools: AIAgentPropertyTools
+var editor_tools: RefCounted
 
 
 func _init(
 	p_node_tools: AIAgentNodeTools,
-	p_property_tools: AIAgentPropertyTools
+	p_property_tools: AIAgentPropertyTools,
+	p_editor_tools: RefCounted
 ) -> void:
 
 	node_tools = p_node_tools
 
 	property_tools = p_property_tools
+
+	editor_tools = p_editor_tools
 
 
 # ==========================================
@@ -73,6 +77,82 @@ func route_request(
 		)
 
 	# ======================================
+	# Route: /get_project_settings
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/get_project_settings"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"get_project_settings_from_request"
+		)
+
+	# ======================================
+	# Routes: project/editor inspection
+	# ======================================
+
+	if method == "GET" and path == "/list_autoloads":
+		return editor_tools.list_autoloads()
+
+	if method == "GET" and path == "/get_editor_state":
+		return editor_tools.get_editor_state()
+
+	if method == "GET" and path == "/list_scenes_in_project":
+		return editor_tools.list_scenes_in_project()
+
+	if method == "GET" and path == "/get_undo_history_summary":
+		return editor_tools.get_undo_history_summary()
+
+	# ======================================
+	# Route: /find_nodes_by_script
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/find_nodes_by_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"find_nodes_by_script_from_request"
+		)
+
+	# ======================================
+	# Route: /find_nodes_by_group
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/find_nodes_by_group"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"find_nodes_by_group_from_request"
+		)
+
+	# ======================================
+	# Route: /count_nodes
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/count_nodes"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"count_nodes_from_request"
+		)
+
+	# ======================================
 	# Route: /validate_node_type
 	# ======================================
 
@@ -100,6 +180,51 @@ func route_request(
 			body_text,
 			node_tools,
 			"list_available_node_types_from_request"
+		)
+
+	# ======================================
+	# Route: /get_node_class_info
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/get_node_class_info"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"get_node_class_info_from_request"
+		)
+
+	# ======================================
+	# Route: /list_node_signals
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/list_node_signals"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"list_node_signals_from_request"
+		)
+
+	# ======================================
+	# Route: /list_node_groups
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/list_node_groups"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"list_node_groups_from_request"
 		)
 
 	# ======================================

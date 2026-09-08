@@ -10,6 +10,27 @@ var undo_redo: EditorUndoRedoManager
 const DEFAULT_NODE_TYPE_RESULT_LIMIT := 50
 const MAX_NODE_TYPE_RESULT_LIMIT := 100
 
+# Project-settings inspection bounds, mirroring the
+# node-type-discovery convention above.
+const DEFAULT_SETTINGS_RESULT_LIMIT := 50
+const MAX_SETTINGS_RESULT_LIMIT := 100
+
+const VariantSerializerScript = preload(
+	"res://addons/Execution_Agent/serialization/ai_agent_variant_serializer.gd"
+)
+
+# Tokens that mark a project-setting name as sensitive.
+# Settings whose name contains one of these are excluded
+# from the response (names only, never values).
+const SENSITIVE_SETTING_TOKENS := [
+	"password",
+	"token",
+	"secret",
+	"api_key",
+	"credential",
+	"private_key"
+]
+
 
 func _init(
 	p_scene_helpers: AIAgentSceneHelpers,
@@ -101,75 +122,33 @@ func find_nodes_from_request(
 	data: Dictionary
 ) -> Dictionary:
 
-	var node_name_filter := ""
-	var node_type_filter := ""
-	var parent_path_filter := ""
-	var name_match := "exact"
-	var include_root := false
+	var filters := _parse_find_node_filters(data)
 
-	if (
-		data.has("node_name")
-		and data["node_name"] != null
-	):
-
-		node_name_filter = (
-			str(data["node_name"])
-		)
-
-	if (
-		data.has("node_type")
-		and data["node_type"] != null
-	):
-
-		node_type_filter = (
-			str(data["node_type"])
-		)
-
-	if (
-		data.has("parent_path")
-		and data["parent_path"] != null
-	):
-
-		parent_path_filter = (
-			str(data["parent_path"])
-		)
-
-	if (
-		data.has("name_match")
-		and data["name_match"] != null
-	):
-
-		name_match = (
-			str(data["name_match"])
-			.to_lower()
-		)
-
-	if data.has("include_root"):
-
-		include_root = bool(
-			data["include_root"]
-		)
-
-	var valid_name_match_modes := [
-		"exact",
-		"contains",
-		"starts_with",
-		"ends_with"
-	]
-
-	if (
-		not valid_name_match_modes.has(
-			name_match
-		)
-	):
-
+	if not filters["valid"]:
 		return {
 			"success": false,
-			"error": (
-				"Invalid name_match mode: "
-				+ name_match
-			)
+			"error": filters["error"]
 		}
+
+	var node_name_filter: String = (
+		filters["node_name_filter"]
+	)
+
+	var node_type_filter: String = (
+		filters["node_type_filter"]
+	)
+
+	var parent_path_filter: String = (
+		filters["parent_path_filter"]
+	)
+
+	var name_match: String = (
+		filters["name_match"]
+	)
+
+	var include_root: bool = (
+		filters["include_root"]
+	)
 
 	var scene_result: Dictionary = (
 		scene_helpers
@@ -246,6 +225,209 @@ func find_nodes_from_request(
 	}
 
 
+# Shared parser for the find_nodes / count_nodes
+# filter shape. Returns valid=true with the parsed
+# filters, or valid=false with the established
+# error message. Both tools must see identical
+# filter semantics.
+func _parse_find_node_filters(
+	data: Dictionary
+) -> Dictionary:
+
+	var node_name_filter := ""
+	var node_type_filter := ""
+	var parent_path_filter := ""
+	var name_match := "exact"
+	var include_root := false
+
+	if (
+		data.has("node_name")
+		and data["node_name"] != null
+	):
+
+		node_name_filter = (
+			str(data["node_name"])
+		)
+
+	if (
+		data.has("node_type")
+		and data["node_type"] != null
+	):
+
+		node_type_filter = (
+			str(data["node_type"])
+		)
+
+	if (
+		data.has("parent_path")
+		and data["parent_path"] != null
+	):
+
+		parent_path_filter = (
+			str(data["parent_path"])
+		)
+
+	if (
+		data.has("name_match")
+		and data["name_match"] != null
+	):
+
+		name_match = (
+			str(data["name_match"])
+			.to_lower()
+		)
+
+	if data.has("include_root"):
+
+		include_root = bool(
+			data["include_root"]
+		)
+
+	var valid_name_match_modes := [
+		"exact",
+		"contains",
+		"starts_with",
+		"ends_with"
+	]
+
+	if (
+		not valid_name_match_modes.has(
+			name_match
+		)
+	):
+
+		return {
+			"valid": false,
+			"error": (
+				"Invalid name_match mode: "
+				+ name_match
+			)
+		}
+
+	return {
+		"valid": true,
+		"error": "",
+		"node_name_filter": node_name_filter,
+		"node_type_filter": node_type_filter,
+		"parent_path_filter": parent_path_filter,
+		"name_match": name_match,
+		"include_root": include_root
+	}
+
+
+# count_nodes
+# ==========================================
+# Read-only aggregate inspection: counts nodes
+# matching the exact same filter semantics as
+# find_nodes, reusing the same traversal and
+# name/type matching, but returns only the count
+# and never the matching node list.
+
+
+func count_nodes_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var filters := _parse_find_node_filters(data)
+
+	if not filters["valid"]:
+		return {
+			"success": false,
+			"error": filters["error"]
+		}
+
+	var node_name_filter: String = (
+		filters["node_name_filter"]
+	)
+
+	var node_type_filter: String = (
+		filters["node_type_filter"]
+	)
+
+	var parent_path_filter: String = (
+		filters["parent_path_filter"]
+	)
+
+	var name_match: String = (
+		filters["name_match"]
+	)
+
+	var scene_result: Dictionary = (
+		scene_helpers
+		.get_edited_scene_root_or_error()
+	)
+
+	if not scene_result["success"]:
+		return scene_result
+
+	var edited_scene_root: Node = (
+		scene_result["scene_root"]
+	)
+
+	var search_root: Node = (
+		edited_scene_root
+	)
+
+	if not parent_path_filter.is_empty():
+
+		var parent_result: Dictionary = (
+			scene_helpers
+			.resolve_node_or_error(
+				parent_path_filter
+			)
+		)
+
+		if not parent_result["success"]:
+
+			return {
+				"success": false,
+				"error": (
+					"Parent node not found: "
+					+ parent_path_filter
+					+ ". "
+					+ str(
+						parent_result.get(
+							"error",
+							"Unknown path error."
+						)
+					)
+				)
+			}
+
+		search_root = (
+			parent_result["node"]
+		)
+
+		parent_path_filter = (
+			parent_result["normalized_path"]
+		)
+
+	# count_nodes intentionally keeps the find_nodes
+	# default of include_root=false; the tool has no
+	# include_root field of its own.
+	var matching_nodes: Array = []
+
+	collect_matching_nodes(
+		edited_scene_root,
+		search_root,
+		matching_nodes,
+		node_name_filter,
+		node_type_filter,
+		name_match,
+		false
+	)
+
+	return {
+		"success": true,
+		"action": "count_nodes",
+		"count": matching_nodes.size(),
+		"node_name_filter": node_name_filter,
+		"node_type_filter": node_type_filter,
+		"parent_path_filter": parent_path_filter,
+		"name_match": name_match
+	}
+
+
 func collect_matching_nodes(
 	edited_scene_root: Node,
 	current_node: Node,
@@ -253,7 +435,9 @@ func collect_matching_nodes(
 	node_name_filter: String,
 	node_type_filter: String,
 	name_match: String,
-	include_root: bool
+	include_root: bool,
+	script_path_filter: String = "",
+	group_name_filter: String = ""
 ) -> void:
 
 	var is_root := (
@@ -274,6 +458,8 @@ func collect_matching_nodes(
 
 		var name_matches := true
 		var type_matches := true
+		var script_matches := true
+		var group_matches := true
 
 		if not node_name_filter.is_empty():
 
@@ -292,9 +478,43 @@ func collect_matching_nodes(
 				== node_type_filter
 			)
 
+		if not script_path_filter.is_empty():
+
+			var attached_script = (
+				current_node.get_script()
+			)
+
+			if attached_script == null:
+
+				script_matches = false
+
+			else:
+
+				script_matches = (
+					str(
+						attached_script
+						.resource_path
+					)
+					== script_path_filter
+				)
+
+		if not group_name_filter.is_empty():
+
+			# Node.is_in_group() is the authoritative
+			# live membership API and is exact and
+			# case-sensitive, matching Godot's own
+			# group-name identity.
+			group_matches = (
+				current_node.is_in_group(
+					group_name_filter
+				)
+			)
+
 		if (
 			name_matches
 			and type_matches
+			and script_matches
+			and group_matches
 		):
 
 			matching_nodes.append(
@@ -328,7 +548,9 @@ func collect_matching_nodes(
 				node_name_filter,
 				node_type_filter,
 				name_match,
-				include_root
+				include_root,
+				script_path_filter,
+				group_name_filter
 			)
 
 
@@ -1451,6 +1673,74 @@ func validate_node_type_from_request(
 
 
 # ==========================================
+# get_node_class_info
+# ==========================================
+# Read-only ClassDB lookup for a single class.
+# Returns the class name, its base class, and whether
+# it can be instantiated directly. No scene state is
+# read or modified.
+
+
+func get_node_class_info_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("class_name"):
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_class_info requires class_name."
+			)
+		}
+
+	var requested_class_name: String = (
+		str(data["class_name"]).strip_edges()
+	)
+
+	if requested_class_name.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_class_info requires a "
+				+ "non-empty class_name."
+			)
+		}
+
+	var class_exists: bool = (
+		ClassDB.class_exists(requested_class_name)
+	)
+
+	if not class_exists:
+
+		return {
+			"success": false,
+			"error": (
+				"'"
+				+ requested_class_name
+				+ "' is not a registered Godot class."
+			)
+		}
+
+	var base_class: String = str(
+		ClassDB.get_parent_class(requested_class_name)
+	)
+
+	var can_instantiate: bool = (
+		ClassDB.can_instantiate(requested_class_name)
+	)
+
+	return {
+		"success": true,
+		"action": "get_node_class_info",
+		"class_name": requested_class_name,
+		"base_class": base_class,
+		"can_instantiate": can_instantiate
+	}
+
+
+# ==========================================
 # list_available_node_types
 # ==========================================
 # Bounded ClassDB discovery for native,
@@ -1621,6 +1911,609 @@ func _node_type_limit_error() -> Dictionary:
 			"list_available_node_types limit must be an "
 			+ "integer from 1 to "
 			+ str(MAX_NODE_TYPE_RESULT_LIMIT)
+			+ "."
+		)
+	}
+# ==========================================
+# list_node_signals
+# ==========================================
+# Read-only signal inspection for a single node in
+# the currently edited scene. The result comes from
+# the node's real reflection data (Node.get_signal_list()),
+# which includes built-in and inherited signals. No scene
+# state is read beyond node resolution or modified.
+
+
+func list_node_signals_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"list_node_signals requires "
+				+ "node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	if node_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"list_node_signals requires a "
+				+ "non-empty node_path (use \".\" "
+				+ "for the edited scene root)."
+			)
+		}
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	# Node.get_signal_list() is the authoritative
+	# Godot reflection source: it returns every
+	# signal available on the node, including
+	# built-in and inherited ones. Only stable,
+	# JSON-safe fields are serialized, and the
+	# list is sorted by signal name so results
+	# are deterministic.
+	var raw_signals: Array = (
+		target_node.get_signal_list()
+	)
+
+	var signals: Array = []
+
+	for raw_signal in raw_signals:
+
+		var signal_args: Array = []
+
+		for raw_arg in (
+			raw_signal.get("args", [])
+		):
+
+			var arg_type := int(
+				raw_arg.get(
+					"type",
+					TYPE_NIL
+				)
+			)
+
+			signal_args.append(
+				{
+					"name": str(
+						raw_arg.get(
+							"name",
+							""
+						)
+					),
+					"type": type_string(
+						arg_type
+					),
+					"type_id": arg_type,
+				}
+			)
+
+		signals.append(
+			{
+				"name": str(
+					raw_signal.get(
+						"name",
+						""
+					)
+				),
+				"args": signal_args,
+			}
+		)
+
+	signals.sort_custom(
+		func(a, b): return a["name"] < b["name"]
+	)
+
+	return {
+		"success": true,
+		"action": "list_node_signals",
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": (
+			str(target_node.name)
+		),
+		"node_type": (
+			target_node.get_class()
+		),
+		"total_signals": signals.size(),
+		"signals": signals,
+	}
+
+# ==========================================
+# list_node_groups
+# ==========================================
+# Read-only group-membership inspection for a single
+# node in the currently edited scene. The result comes
+# from the node's real instance state (Node.get_groups()).
+# No scene state is modified.
+
+
+func list_node_groups_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"list_node_groups requires "
+				+ "node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	if node_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"list_node_groups requires a "
+				+ "non-empty node_path (use \".\" "
+				+ "for the edited scene root)."
+			)
+		}
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	# Node.get_groups() is the authoritative Godot
+	# source for instance group membership. It
+	# returns StringName values; convert them to
+	# plain strings and sort them so the result is
+	# deterministic regardless of Godot's internal
+	# group ordering.
+	var groups: Array = []
+
+	for group in target_node.get_groups():
+
+		groups.append(str(group))
+
+	groups.sort()
+
+	return {
+		"success": true,
+		"action": "list_node_groups",
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": (
+			str(target_node.name)
+		),
+		"node_type": (
+			target_node.get_class()
+		),
+		"total_groups": groups.size(),
+		"groups": groups,
+	}
+
+# ==========================================
+# find_nodes_by_script
+# ==========================================
+# Read-only script-attachment inspection for the
+# currently edited scene. Traverses the real scene
+# tree and matches each node's live attached script
+# (Node.get_script().resource_path) against the
+# requested script path. No scene state is modified.
+
+
+func find_nodes_by_script_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("script_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"find_nodes_by_script requires "
+				+ "script_path."
+			)
+		}
+
+	var script_path: String = (
+		str(data["script_path"]).strip_edges()
+	)
+
+	if script_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"find_nodes_by_script requires a "
+				+ "non-empty script_path."
+			)
+		}
+
+	# Deterministic normalization: match against the
+	# canonical Godot resource path. A request without
+	# the res:// prefix is normalized by prepending it,
+	# so "scripts/player.gd" and
+	# "res://scripts/player.gd" are equivalent. No
+	# fuzzy matching is performed.
+	if not script_path.begins_with("res://"):
+
+		script_path = (
+			"res://"
+			+ script_path
+		)
+
+	var scene_result: Dictionary = (
+		scene_helpers
+		.get_edited_scene_root_or_error()
+	)
+
+	if not scene_result["success"]:
+		return scene_result
+
+	var edited_scene_root: Node = (
+		scene_result["scene_root"]
+	)
+
+	var matching_nodes: Array = []
+
+	# Reuses the exact find_nodes traversal and node
+	# serialization via the shared collector; only the
+	# script filter differs.
+	collect_matching_nodes(
+		edited_scene_root,
+		edited_scene_root,
+		matching_nodes,
+		"",
+		"",
+		"exact",
+		false,
+		script_path
+	)
+
+	return {
+		"success": true,
+		"action": "find_nodes_by_script",
+		"script_path": script_path,
+		"count": matching_nodes.size(),
+		"nodes": matching_nodes
+	}
+
+# ==========================================
+# find_nodes_by_group
+# ==========================================
+# Read-only group-membership inspection for the
+# currently edited scene. Traverses the real scene
+# tree and matches each node's live group membership
+# (Node.is_in_group(), exact and case-sensitive)
+# against the requested group name. No scene state
+# is modified.
+
+
+func find_nodes_by_group_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("group_name"):
+
+		return {
+			"success": false,
+			"error": (
+				"find_nodes_by_group requires "
+				+ "group_name."
+			)
+		}
+
+	var group_name: String = (
+		str(data["group_name"]).strip_edges()
+	)
+
+	if group_name.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"find_nodes_by_group requires a "
+				+ "non-empty group_name."
+			)
+		}
+
+	var scene_result: Dictionary = (
+		scene_helpers
+		.get_edited_scene_root_or_error()
+	)
+
+	if not scene_result["success"]:
+		return scene_result
+
+	var edited_scene_root: Node = (
+		scene_result["scene_root"]
+	)
+
+	var matching_nodes: Array = []
+
+	# Reuses the exact find_nodes traversal and node
+	# serialization via the shared collector; only the
+	# group filter differs.
+	collect_matching_nodes(
+		edited_scene_root,
+		edited_scene_root,
+		matching_nodes,
+		"",
+		"",
+		"exact",
+		false,
+		"",
+		group_name
+	)
+
+	return {
+		"success": true,
+		"action": "find_nodes_by_group",
+		"group_name": group_name,
+		"count": matching_nodes.size(),
+		"nodes": matching_nodes
+	}
+# ==========================================
+# get_project_settings
+# ==========================================
+# Read-only, bounded ProjectSettings inspection.
+#
+# Never dumps the whole database. Two mutually-combivable
+# filters: exact `setting_names` and/or a bounded `prefix`.
+# At least one must be provided. Prefix results are bounded by
+# DEFAULT/MAX_SETTINGS_RESULT_LIMIT. Setting names matching a
+# sensitive token are excluded (name only) to prevent accidental
+# bulk exposure of credentials.. Values are serialized with the
+# project's shared Variant serializer.
+
+
+func get_project_settings_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var setting_names: Array = []
+	var prefix := ""
+	var limit := DEFAULT_SETTINGS_RESULT_LIMIT
+
+	if (
+		data.has("setting_names")
+		and data["setting_names"] != null
+	):
+		if not data["setting_names"] is Array:
+			return {
+				"success": false,
+				"error": (
+					"get_project_settings setting_names must be a list."
+				)
+			}
+
+		for raw_name in data["setting_names"]:
+
+			var name := str(raw_name).strip_edges()
+
+			if name.is_empty():
+				continue
+
+			if not setting_names.has(name):
+				setting_names.append(name)
+
+	if (
+		data.has("prefix")
+		and data["prefix"] != null
+	):
+		prefix = str(
+			data["prefix"]
+		).strip_edges()
+
+	if (
+		setting_names.is_empty()
+		and prefix.is_empty()
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"get_project_settings requires at least one of "
+				+ "non-empty setting_names or prefix."
+			)
+		}
+
+	var use_limit := not prefix.is_empty()
+
+	if use_limit and data.has("limit") and data["limit"] != null:
+
+		var supplied_limit = data["limit"]
+
+		if (
+			typeof(supplied_limit) != TYPE_INT
+			and typeof(supplied_limit) != TYPE_FLOAT
+		):
+
+			return _settings_limit_error()
+
+		limit = int(supplied_limit)
+
+
+
+		if (
+			float(supplied_limit) != float(limit)
+			or limit < 1
+			or limit > MAX_SETTINGS_RESULT_LIMIT
+		):
+
+			return _settings_limit_error()
+
+	var variant_serializer = VariantSerializerScript.new()
+
+	var settings := {}
+	var missing: Array = []
+	var redacted: Array = []
+
+	# 1. Exact requested names (always returned when present,
+	# independent of the prefix limit). Missing names are reported
+	# deterministically in `missing`;, they do not fail the request.
+	for name in setting_names:
+
+		if _is_sensitive_setting_name(name):
+			redacted.append(name)
+
+			continue
+
+		if not ProjectSettings.has_setting(name):
+			missing.append(name)
+			continue
+
+		settings[name] = (
+			variant_serializer
+			.serialize_property_value(
+				ProjectSettings.get_setting(name)
+			)
+		)
+
+	# 2. Prefix enumeration (bounded, lexicographically sorted)..
+	var returned_prefix_matches := 0
+	var total_prefix_matches := 0
+	var truncated := false
+
+	if not prefix.is_empty():
+
+		var property_list: Array = (
+			ProjectSettings.get_property_list()
+		)
+
+		var matching_keys: Array = []
+
+		for entry in property_list:
+
+			var key := str(
+				entry.get(
+					"name",
+					""
+				)
+			)
+
+			if not key.begins_with(prefix):
+				continue
+
+			if not settings.has(key):
+				matching_keys.append(key)
+
+
+
+		matching_keys.sort()
+
+		total_prefix_matches = matching_keys.size()
+
+		for key in matching_keys:
+
+			if returned_prefix_matches >= limit:
+				truncated = true
+				break
+
+			if _is_sensitive_setting_name(key):
+				redacted.append(key)
+				continue
+
+
+
+			settings[key] = (
+				variant_serializer
+				.serialize_property_value(
+					ProjectSettings.get_setting(key)
+				)
+			)
+
+			returned_prefix_matches += 1
+
+	var result := {
+		"success": true,
+		"action": "get_project_settings",
+		"setting_names": setting_names,
+		"prefix": prefix,
+		"settings": settings,
+		"missing": missing,
+		"redacted": redacted
+	}
+
+	if not prefix.is_empty():
+		result["total_matches"] = total_prefix_matches
+		result["returned_matches"] = returned_prefix_matches
+		result["truncated"] = truncated
+
+	return result
+
+
+func _is_sensitive_setting_name(
+	setting_name: String
+) -> bool:
+
+	var lower_name := setting_name.to_lower()
+
+	for token in SENSITIVE_SETTING_TOKENS:
+
+		if lower_name.contains(token):
+			return true
+
+	return false
+
+
+func _settings_limit_error() -> Dictionary:
+
+	return {
+		"success": false,
+		"error": (
+			"get_project_settings limit must be an "
+			+ "integer from 1 to "
+			+ str(MAX_SETTINGS_RESULT_LIMIT)
 			+ "."
 		)
 	}

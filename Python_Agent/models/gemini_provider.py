@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+from copy import deepcopy
 
 from dotenv import load_dotenv
 from google import genai
@@ -50,6 +51,14 @@ GEMINI_MAX_ATTEMPTS = 3  # initial request + 2 retries
 
 GEMINI_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 
+GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS = {
+    "CountNodesAction",
+    "ListAutoloadsAction",
+    "GetEditorStateAction",
+    "ListScenesInProjectAction",
+    "GetUndoHistorySummaryAction",
+}
+
 
 def _is_transient_gemini_error(
     error: BaseException,
@@ -59,6 +68,56 @@ def _is_transient_gemini_error(
         error,
         genai_errors.ServerError,
     )
+
+
+def _inline_count_nodes_refs(
+    value,
+    count_schema,
+):
+
+    if isinstance(value, dict):
+
+        if (
+            "items" in value
+            and isinstance(value["items"], dict)
+            and "anyOf" in value["items"]
+        ):
+            value = deepcopy(value)
+            value["items"]["anyOf"] = [
+                item
+                for item in value["items"]["anyOf"]
+                if not (
+                    isinstance(item, dict)
+                    and (
+                        item.get("title")
+                        in GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+                        or item.get("$ref")
+                        in {
+                            "#/$defs/" + action_name
+                            for action_name in
+                            GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+                        }
+                    )
+                )
+            ]
+
+        if value.get("$ref") == "#/$defs/CountNodesAction":
+
+            return deepcopy(count_schema)
+
+        return {
+            key: _inline_count_nodes_refs(item, count_schema)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, list):
+
+        return [
+            _inline_count_nodes_refs(item, count_schema)
+            for item in value
+        ]
+
+    return value
 
 
 def make_gemini_schema_compatible(
@@ -115,6 +174,55 @@ def make_gemini_schema_compatible(
                 )
             )
 
+        # Gemini rejects overlapping find/count union branches after
+        # Pydantic's discriminator metadata is removed.
+        if converted.get("title") == "CountNodesAction":
+            properties = converted.setdefault("properties", {})
+
+            for property_name in (
+                "node_name",
+                "node_type",
+                "parent_path",
+                "name_match",
+            ):
+                properties.get(property_name, {}).pop(
+                    "default",
+                    None,
+                )
+
+            properties["result_mode"] = {
+                "enum": ["count"],
+                "type": "string",
+            }
+            required = converted.setdefault("required", [])
+            for property_name in (
+                "node_name",
+                "node_type",
+                "parent_path",
+                "name_match",
+                "result_mode",
+            ):
+                if property_name not in required:
+                    required.append(property_name)
+
+
+        if "$defs" in converted:
+
+            count_schema = converted["$defs"].get(
+                "CountNodesAction"
+            )
+
+            if count_schema is not None:
+
+                converted = _inline_count_nodes_refs(
+                    converted,
+                    count_schema,
+                )
+
+                converted["$defs"].pop(
+                    "CountNodesAction",
+                    None,
+                )
 
         return converted
 

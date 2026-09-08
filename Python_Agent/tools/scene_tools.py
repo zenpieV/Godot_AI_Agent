@@ -166,6 +166,174 @@ def find_nodes(
     )
 
 
+def count_nodes(
+    node_name=None,
+    node_type=None,
+    parent_path=None,
+    name_match="exact",
+):
+    """
+    Count the nodes in the currently edited Godot
+    scene matching the same filter semantics as
+    find_nodes, without returning the node list.
+
+    Use this instead of find_nodes when only the
+    number of matching nodes is needed, e.g.
+    "how many enemies exist?" or "are there at
+    least 5 triggers?".
+
+    The bridge is authoritative: the count comes
+    from a real traversal of the currently edited
+    scene.
+    """
+
+    payload = {
+        "node_name": node_name,
+        "node_type": node_type,
+        "parent_path": parent_path,
+        "name_match": name_match
+    }
+
+    return _request_json(
+        endpoint="/count_nodes",
+        method="POST",
+        payload=payload
+    )
+
+
+def find_nodes_by_script(
+    script_path
+):
+    """
+    Find the nodes in the currently edited Godot
+    scene whose attached script matches the
+    requested script resource path.
+
+    The result is authoritative: the bridge inspects
+    each node's live attached script (get_script)
+    during a real traversal of the edited scene.
+    Paths without a res:// prefix are normalized by
+    prepending it; matching is exact, with no fuzzy
+    matching.
+
+    Example script_path: "res://scripts/player.gd"
+    """
+
+    payload = {
+        "script_path": script_path
+    }
+
+    return _request_json(
+        endpoint="/find_nodes_by_script",
+        method="POST",
+        payload=payload
+    )
+
+
+def find_nodes_by_group(
+    group_name
+):
+    """
+    Find the nodes in the currently edited Godot
+    scene that are members of the requested group.
+
+    The result is authoritative: the bridge inspects
+    each node's live group membership (is_in_group)
+    during a real traversal of the edited scene.
+    Matching is exact and case-sensitive.
+
+    Example group_name: "enemies"
+    """
+
+    payload = {
+        "group_name": group_name
+    }
+
+    return _request_json(
+        endpoint="/find_nodes_by_group",
+        method="POST",
+        payload=payload
+    )
+
+
+def get_project_settings(
+    setting_names=None,
+    prefix=None,
+    limit=None,
+):
+    """
+    Inspect specific project settings from the live
+    Godot ProjectSettings state, without dumping the
+    whole database.
+
+
+    Pass exact `setting_names` (a list of canonical
+    setting keys,) and/or a `prefix` (return settings whose
+    keys begin with it,) plus an optional `limit` on the
+    prefix portion (1-100, default 50). At least one
+    of setting_names/prefix must be provided; an unfiltered
+    request that returns every setting is rejected by Godot.
+
+    Values are serialized with the project's shared Variant
+    serializer; setting names matching a sensitive token
+    (password, token, secret, api_key, credential,
+    private_key) are excluded from the response (names only).
+
+    Examples:
+### get_project_settings(
+###     setting_names=[
+###         "display/window/size/viewport_width",
+###         "display/window/size/viewport_height"
+###     ]
+### )
+### get_project_settings(prefix="display/window/size/")
+    """
+
+    payload = {
+        "setting_names": setting_names,
+        "prefix": prefix,
+        "limit": limit
+    }
+
+    return _request_json(
+        endpoint="/get_project_settings",
+        method="POST",
+        payload=payload
+    )
+
+def list_autoloads():
+    """Return the project's configured autoload names and targets."""
+
+    return _request_json(
+        endpoint="/list_autoloads",
+        method="GET",
+    )
+
+def get_editor_state():
+    """Return bounded, deterministic state from the Godot editor."""
+
+    return _request_json(
+        endpoint="/get_editor_state",
+        method="GET",
+    )
+
+def list_scenes_in_project():
+    """Return scene resources known to the Godot editor filesystem."""
+
+    return _request_json(
+        endpoint="/list_scenes_in_project",
+        method="GET",
+    )
+
+def get_undo_history_summary():
+    """Return a read-only summary of available editor undo/redo state."""
+
+    return _request_json(
+        endpoint="/get_undo_history_summary",
+        method="GET",
+    )
+
+
 def get_node_properties(
     node_path
 ):
@@ -269,6 +437,85 @@ def list_available_node_types(
 
     return _request_json(
         endpoint="/list_available_node_types",
+        method="POST",
+        payload=payload,
+    )
+
+
+def get_node_class_info(
+    class_name,
+):
+    """
+    Ask the Godot editor bridge for ClassDB information
+    about a specific Godot class.
+
+    The result is authoritative: the bridge answers from
+    the real ClassDB of the running editor. Returns the
+    class name, its base class, and whether it can be
+    instantiated directly.
+    """
+
+    payload = {
+        "class_name": class_name,
+    }
+
+    return _request_json(
+        endpoint="/get_node_class_info",
+        method="POST",
+        payload=payload,
+    )
+
+
+def list_node_signals(
+    node_path,
+):
+    """
+    List the signals actually available on a node in
+    the currently edited scene.
+
+    The result is authoritative: the bridge answers from
+    the node's real reflection data (get_signal_list),
+    including built-in and inherited signals, sorted by
+    signal name.
+
+    node_path must be relative to the edited scene root.
+
+    Use "." for the scene root.
+    """
+
+    payload = {
+        "node_path": node_path,
+    }
+
+    return _request_json(
+        endpoint="/list_node_signals",
+        method="POST",
+        payload=payload,
+    )
+
+
+def list_node_groups(
+    node_path,
+):
+    """
+    List the groups a node in the currently edited
+    scene is actually a member of.
+
+    The result is authoritative: the bridge answers
+    from the node's real instance state (get_groups),
+    sorted alphabetically for deterministic output.
+
+    node_path must be relative to the edited scene root.
+
+    Use "." for the scene root.
+    """
+
+    payload = {
+        "node_path": node_path,
+    }
+
+    return _request_json(
+        endpoint="/list_node_groups",
         method="POST",
         payload=payload,
     )

@@ -691,6 +691,738 @@ returned exact path.
 
 ---
 
+# Tool: get_node_property
+
+Inspects a single property of a single node so the agent can read a
+precise, already-known value without re-requesting the entire property
+list (which it would do with `get_node_properties`). It is the
+single-value counterpart to `get_node_properties` and, like it, is a
+read-only inspection action.
+
+- Provider: Godot bridge (`AIAgentPropertyTools.get_node_property_from_request`).
+- Batchable: yes — may appear as a batch item (read-only, no boundary).
+- Mutation: no.
+
+## Parameters
+
+| Field           | Type   | Required | Notes                                                                 |
+|-----------------|--------|----------|-----------------------------------------------------------------------|
+| `node_path`     | `str`  | yes      | Editor-relative path (e.g. `"."` for the edited root, `"Player"`).    |
+| `property_name` | `str`  | yes      | An editor-visible readable property, or the special scene-tree-visible `Node.name` attribute. |
+
+Both must be non-empty; blank/whitespace strings are rejected by the
+agent-side `validate_agent_action` check before the bridge is called.
+
+## Response (success)
+
+Returned verbatim from the bridge:
+
+    {
+      "success": true,
+      "action": "get_node_property",
+      "node_path": "<input node_path>",
+      "node_name": "<resolved node name>",
+      "node_type": "<resolved node type>",
+      "property_name": "<input property_name>",
+      "property_type": "<type string>",
+      "property_type_id": <int>,
+      "editable": <bool>,
+      "value": { "type": "<type string>", ... }
+    }
+
+`value` is normalized via `AIAgentVariantSerializer` into a JSON-
+compatible structure. Scalar values are emitted directly; compound values
+carry the serializer's existing type-specific JSON structure.
+
+## Errors
+
+- Missing or blank `node_path` / `property_name` → rejected client-side
+  by `validate_agent_action`
+  (`"requires non-empty field(s): <field>"`).
+- Node not found → `{"success": false, "error": "Node not found: <path>"}`.
+- Unsupported property →
+  `{"success": false, "error": "Property not found: <property> on node <name>"}`.
+
+`name` is readable for every `Node`, even though Godot omits it from the
+editor-property enumeration. It is returned as a read-only `StringName`;
+use `rename_node` for changes so normal undo behavior is preserved.
+
+All errors are the standard structured-failure form
+(`{"success": false, "error": "..."}`); a bridge failure is propagated
+to the agent unchanged (no exception wrapping, no partial execution).
+
+Recovery: locate the node with `find_nodes`, then retry with the
+returned exact path.
+
+---
+
+# Tool: validate_node_type
+
+## Purpose
+
+Read-only pre-flight check for node-type dependent operations such
+as `create_node`. The Godot bridge answers from the actual
+`ClassDB` of the running editor, so the result is authoritative.
+
+Use before creating a node whenever the exact Godot class name is
+not certain, instead of guessing type names or retrying failed
+`create_node` calls with different spellings.
+
+---
+
+## Required Input
+
+    node_type
+
+Example:
+
+    {
+      "node_type": "CharacterBody2D"
+    }
+
+---
+
+## Successful Result
+
+The tool call succeeds whenever the bridge could answer; the
+`valid` field carries the answer:
+
+    {
+      "success": true,
+      "action": "validate_node_type",
+      "node_type": "CharacterBody2D",
+      "valid": true,
+      "exists": true,
+      "is_node_class": true,
+      "can_instantiate": true,
+      "parent_class": "PhysicsBody2D",
+      "message": "'CharacterBody2D' is a valid, instantiable node type."
+    }
+
+Field semantics:
+
+- `exists`: the name is a registered Godot class.
+- `is_node_class`: the class inherits from `Node`.
+- `can_instantiate`: the class can be instantiated directly
+  (abstract bases such as `CanvasItem` are `false`).
+- `valid`: `exists` AND `is_node_class` AND `can_instantiate`.
+- `node_type`: the requested type after whitespace trimming.
+- `parent_class`: the direct Godot parent class (`""` when the
+  type does not exist).
+
+A type that exists but is not usable for node creation (for
+example `Resource`, which is not a Node class, or `CanvasItem`,
+which is abstract) returns `"valid": false` with an explanatory
+`message`, not a failed tool call.
+
+---
+
+## Validation Failure
+
+A missing or empty `node_type` returns the standard structured
+failure:
+
+    {
+      "success": false,
+      "error": "validate_node_type requires node_type."
+    }
+
+---
+
+## Limitations
+
+`ClassDB` covers native Godot classes only. Script-defined
+(`class_name`) custom node types are not validated by this tool
+yet.
+
+---
+
+# Tool: list_available_node_types
+
+## Purpose
+
+Lists bounded candidates from the running editor's `ClassDB` for native,
+instantiable Godot `Node` classes. Use it to discover plausible names,
+then use `validate_node_type` on an exact candidate before `create_node`.
+It is read-only and batchable.
+
+## Parameters
+
+All parameters are optional.
+
+| Field | Type | Notes |
+|---|---|---|
+| `inherits_from` | `str` | Restrict to this class and its descendants. Must name a registered `Node` class. |
+| `name_contains` | `str` | Case-insensitive substring filter for the class name. |
+| `limit` | `int` | Maximum returned names, from 1–100. Defaults to 50. |
+
+Unfiltered queries are allowed, but the result is still bounded. Supplied
+string filters must be non-empty after trimming.
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "list_available_node_types",
+      "inherits_from": "Node2D",
+      "name_contains": "body",
+      "limit": 50,
+      "total_matches": 2,
+      "truncated": false,
+      "node_types": ["CharacterBody2D", "StaticBody2D"]
+    }
+
+`node_types` is alphabetical and contains only native `Node` classes
+that `ClassDB` reports as directly instantiable. `total_matches` is the
+number before applying `limit`; `truncated` is true precisely when more
+matches exist than were returned. A successful no-match result has
+`total_matches: 0` and `node_types: []`.
+
+## Errors
+
+Invalid `inherits_from` filters, blank supplied filters, and limits
+outside 1–100 return `{"success": false, "error": "..."}`. An
+`inherits_from` value that names a non-Node class is invalid rather than
+a no-match result.
+
+## Limitations
+
+Only native `ClassDB` classes are listed. Script-defined `class_name`
+types are deliberately outside this tool's scope, and no ClassDB
+metadata beyond candidate names is exposed.
+
+---
+
+# Tool: list_node_signals
+
+## Purpose
+
+Lists the signals actually available on one node in the currently edited
+scene, from the node's real reflection data (`Node.get_signal_list()`).
+It includes built-in and inherited signals. Use it to determine whether
+a named signal exists on a node before attempting any future connection
+work. It is read-only and batchable.
+
+## Parameters
+
+| Field | Type | Notes |
+|---|---|---|
+| `node_path` | `str` | Required, non-empty. Relative to the edited scene root; `"."` is the scene root. |
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "list_node_signals",
+      "node_path": "Player",
+      "node_name": "Player",
+      "node_type": "Area2D",
+      "total_signals": 31,
+      "signals": [
+        {
+          "name": "area_entered",
+          "args": [
+            {"name": "area", "type": "Object", "type_id": 24}
+          ]
+        }
+      ]
+    }
+
+`signals` is sorted alphabetically by signal name and is deterministic.
+Each entry carries the signal `name` and its argument list; each argument
+carries `name`, Godot `type` string, and numeric `type_id`. No other
+metadata is exposed.
+
+## Errors
+
+A missing or blank `node_path`, a disallowed absolute path, and a
+nonexistent node return the standard structured failure form
+`{"success": false, "error": "..."}`. Missing-node failures are
+produced by the same node-resolution helper used by the property tools.
+
+## Limitations
+
+The result reflects Godot's reflection API only. Script-defined signals
+appear only if the running node actually exposes them through
+`get_signal_list()`. No connection state is exposed.
+
+## Contract decision
+
+The original roadmap draft also proposed an optional
+`include_connections` flag. It was intentionally **not** implemented.
+The final request contract is `node_path` only, and the tool reports
+signal definitions, not connection state. Connection inspection can be
+considered separately later if there is a demonstrated need. This is a
+deliberate scope reduction, not a missing feature: the current goal is
+reliable signal discovery, not signal wiring inspection.
+
+---
+
+# Tool: list_node_groups
+
+## Purpose
+
+Reports the groups a single node in the currently edited scene is
+actually a member of, from the node's real instance state
+(`Node.get_groups()`). Use it to answer: which groups is this node in,
+is this node a member of group X, does this node have any groups.
+It is read-only and batchable.
+
+## Parameters
+
+| Field | Type | Notes |
+|---|---|---|
+| `node_path` | `str` | Required, non-empty. Relative to the edited scene root; `"."` is the scene root. |
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "list_node_groups",
+      "node_path": "Player",
+      "node_name": "Player",
+      "node_type": "CharacterBody2D",
+      "total_groups": 2,
+      "groups": ["characters", "players"]
+    }
+
+`groups` is sorted alphabetically and is deterministic. A node with no
+groups is a successful result with `total_groups: 0` and `groups: []`.
+
+## Errors
+
+A missing or blank `node_path`, a disallowed absolute path, and a
+nonexistent node return the standard structured failure form
+`{"success": false, "error": "..."}` via the shared node-resolution
+helper.
+
+## Limitations
+
+Group membership is instance state. No group owners, project-wide
+group lists, group definitions, or editor metadata are exposed, and no
+mutation of group membership exists in this tool.
+
+---
+
+# Tool: count_nodes
+
+## Purpose
+
+Counts the nodes in the currently edited scene matching the same filter
+semantics as `find_nodes`, without returning the node list. Use it when
+only the number is needed, e.g. "how many Enemy nodes are in the
+scene?", "are there exactly 5 enemies?", "do we have at least 3 trigger
+areas?". It is read-only and batchable.
+
+The distinction from `find_nodes`:
+
+    find_nodes  -> I need the matching nodes.
+    count_nodes -> I only need to know how many.
+
+Do not use screenshots or visual reasoning for structural counts;
+`count_nodes` provides the deterministic answer.
+
+## Parameters
+
+All parameters are optional; omitted fields do not filter.
+
+| Field | Type | Notes |
+|---|---|---|
+| `node_name` | `str` | Node name filter. |
+| `node_type` | `str` | Exact Godot class name filter (`get_class()` equality). |
+| `parent_path` | `str` | Restrict counting to this node's subtree. Must resolve to an existing node. |
+| `name_match` | `str` | `exact` (default), `contains`, `starts_with`, `ends_with`. Case-insensitive. |
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "count_nodes",
+      "count": 3,
+      "node_name_filter": "Enemy",
+      "node_type_filter": "Area2D",
+      "parent_path_filter": "Enemies",
+      "name_match": "exact"
+    }
+
+The field name is `count`, matching the existing `find_nodes` result
+convention; no competing name is used. Zero matches is a successful
+result with `count: 0`. The matching node list is never returned.
+
+## Errors
+
+An invalid `name_match` mode returns the shared structured error
+(`Invalid name_match mode: ...`). A `parent_path` that does not resolve
+returns the existing `Parent node not found: ...` failure. All failures
+use the standard `{"success": false, "error": "..."}` form.
+
+## Limitations
+
+The count reflects only the currently edited scene, as with
+`find_nodes`. There is no `include_root` parameter; the edited scene
+root itself is never counted. This tool reports state only; completion
+declaration logic does not belong to this tool.
+
+---
+
+# Tool: find_nodes_by_script
+
+## Purpose
+
+Finds the nodes in the currently edited scene whose attached script
+matches the requested script resource path, by inspecting each node's
+live attached script (`Node.get_script()`) during a real traversal.
+Use it for questions like "which nodes use player.gd?". It is
+read-only and batchable.
+
+The architectural distinction remains:
+
+    find_nodes             -> general name/type search
+    count_nodes            -> aggregate count
+    find_nodes_by_script   -> script-attachment search
+
+## Parameters
+
+| Field | Type | Notes |
+|---|---|---|
+| `script_path` | `str` | Required, non-empty. The script resource path to match. |
+
+## Script path semantics
+
+Matching is against the canonical Godot resource path of the attached
+script (e.g. `res://scripts/player.gd`). A request without the
+`res://` prefix is deterministically normalized by prepending it, so
+`scripts/player.gd` and `res://scripts/player.gd` are equivalent.
+Matching is exact: no fuzzy matching, regex, filename-only guessing,
+or filesystem scanning is performed.
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "find_nodes_by_script",
+      "script_path": "res://scripts/player.gd",
+      "count": 2,
+      "nodes": [
+        {
+          "name": "Player",
+          "node_type": "CharacterBody2D",
+          "path": "Player",
+          "is_root": false
+        }
+      ]
+    }
+
+`nodes` reuses the exact `find_nodes` node representation and the same
+deterministic traversal ordering. A zero-match script is a successful
+result with `count: 0` and an empty `nodes` list, not an error.
+
+## Errors
+
+A missing or blank `script_path` returns the standard structured
+failure form `{"success": false, "error": "..."}`.
+
+## Limitations
+
+Only direct script attachment is inspected. Script inheritance,
+tool/export metadata, and filesystem-wide script discovery are outside
+this tool's scope.
+
+---
+
+# Tool: find_nodes_by_group
+
+## Purpose
+
+Finds the nodes in the currently edited scene that are members of the
+requested group, by inspecting each node's live group membership
+(`Node.is_in_group()`) during a real traversal. Use it for questions
+like "which nodes are in the enemies group?". It is read-only and
+batchable.
+
+The architectural distinction remains:
+
+    find_nodes             -> general name/type search
+    count_nodes            -> aggregate count
+    find_nodes_by_script   -> script-attachment search
+    find_nodes_by_group    -> exact group-membership search
+    list_node_groups       -> groups belonging to one specific node
+
+## Parameters
+
+| Field | Type | Notes |
+|---|---|---|
+| `group_name` | `str` | Required, non-empty. The exact group name to match. |
+
+## Group-name semantics
+
+Matching is **exact and case-sensitive**, preserving Godot's own
+group-name identity: `enemies` matches only `enemies`, never `enemy`,
+`Enemies`, or `hostile_enemies`. No case-insensitive, contains, fuzzy,
+regex, or wildcard matching is performed. Zero matches are a
+successful result, not an error.
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "find_nodes_by_group",
+      "group_name": "enemies",
+      "count": 2,
+      "nodes": [
+        {
+          "name": "Enemy",
+          "node_type": "Area2D",
+          "path": "Enemy",
+          "is_root": false
+        }
+      ]
+    }
+
+`nodes` reuses the exact `find_nodes` node representation and the same
+deterministic traversal ordering. A node belonging to multiple groups
+appears when querying each of those groups.
+
+## Errors
+
+A missing or blank `group_name` returns the standard structured
+failure form `{"success": false, "error": "..."}`.
+
+## Limitations
+
+Only direct live group membership is inspected. No group creation or
+removal, no project-wide group discovery, no multi-group boolean
+expressions, and no group metadata are exposed.
+
+
+# Tool: get_project_settings
+
+## Purpose
+
+Reads specific settings from the live Godot `ProjectSettings` state. It never
+dumps the whole settings database: the agent must ask for exact setting
+names and/or a bounded prefix. Use it for questions like "what is the
+viewport width?", "what renderer is configured?", "what is the main scene?".
+
+This is the project-level counterpart to the structural scene-inspection
+tools. It is read-only and batchable.
+
+## Parameters
+
+At least one of `setting_names` or `prefix` must be provided and non-empty.
+Both may be provided; they are treated as additive filters.
+
+| Field | Type | Notes |
+|---|---|---|
+| `setting_names` | `list[str]` | Exact setting keys to look up. Duplicates are deduped; blank entries are dropped. |
+| `prefix` | `str` | Return settings whose key begins with this prefix (bounded, lexicographically sorted). |
+| `limit` | `int` | Max prefix matches to return (1-100, default 50). Ignored for exact-name requests. |
+
+## Exact-name semantics
+
+- Keys are matched exactly against `ProjectSettings.has_setting()`.
+- Missing keys are reported in `missing`, not treated as a request failure.
+- Settings whose name contains a sensitive token (`password`, `token`,
+  `secret`, `api_key`, `credential`, `private_key`) are excluded from the
+  response: only their names appear in `redacted`, never their values.
+
+## Prefix semantics
+
+- Uses `ProjectSettings.get_property_list()` and selects keys with
+  `begins_with(prefix)`, then sorts lexicographically.
+- Results are bounded by `limit` (default 50, max 100).
+- `total_matches`, `returned_matches`, and `truncated` are reported.
+- Exact-name matches are never removed by the prefix limit.
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "get_project_settings",
+      "setting_names": ["display/window/size/viewport_width"],
+      "prefix": "",
+      "settings": {
+        "display/window/size/viewport_width": 1280
+      },
+      "missing": [],
+      "redacted": []
+    }
+
+A prefix query adds `total_matches`, `returned_matches`, `truncated`:
+
+    {
+      "success": true,
+      "action": "get_project_settings",
+      "setting_names": [],
+      "prefix": "display/window/size/",
+      "settings": { "...": "..." },
+      "missing": [],
+      "redacted": [],
+      "total_matches": 8,
+      "returned_matches": 8,
+      "truncated": false
+    }
+
+Zero matches is a successful result with `settings: {}` and `missing: []`.
+A request with neither filter returns a structured validation error.
+
+## Errors
+
+- Neither filter provided:
+  `get_project_settings requires at least one of non-empty setting_names or prefix.`
+- `setting_names` is not a list:
+  `get_project_settings setting_names must be a list.`
+- Invalid `limit`:
+  `get_project_settings limit must be an integer from 1 to 100.`
+
+All failures use the standard `{"success": false, "error": "..."}` form.
+
+## Serialization
+
+Values are serialized through the project's shared
+`ai_agent_variant_serializer.gd`. Integers, floats, booleans, strings,
+arrays, and dictionaries are represented as plain JSON-compatible values.
+Godot Object values are converted to the serializer's safe representation
+rather than being blindly JSON-encoded.
+
+## Limitations
+
+Reads only the live `ProjectSettings` runtime state; the `project.godot`
+file is never parsed manually. No project-setting mutation is provided.
+Sensitive-setting protection covers setting names only (values are never
+exposed); it is a small deterministic filter, not a secret-detection
+system. Completion-declaration logic does not belong to this tool.
+
+---
+
+---
+
+# Tool: list_autoloads
+
+## Purpose
+
+Lists the project's configured autoload entries from live Godot
+`ProjectSettings`. It is read-only and batchable.
+
+## Parameters
+
+None.
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "list_autoloads",
+      "count": 1,
+      "autoloads": [
+        {
+          "name": "GameState",
+          "path": "res://game_state.gd",
+          "resource_target": "*res://game_state.gd"
+        }
+      ]
+    }
+
+Entries are sorted by autoload name. The leading `*` used by Godot to mark
+script autoloads is removed from `path` and preserved in
+`resource_target`. Empty projects return a successful empty list.
+
+## Limitations
+
+The tool reads `ProjectSettings.get_property_list()` and does not parse
+`project.godot`, scan files, infer autoloads, or mutate project settings.
+
+---
+
+# Tool: get_editor_state
+
+## Purpose
+
+Reports bounded current state from the running Godot editor. It is
+read-only and batchable.
+
+## Parameters
+
+None.
+
+## Successful Result
+
+The response includes whether an edited scene exists, its path/name/type,
+open scene paths, selected node name/type/path entries, playing-scene state,
+and a selection count. Selected node paths are relative to the edited scene
+when possible.
+
+## Limitations
+
+The implementation uses the injected `EditorInterface`; it does not scrape
+editor UI text, screenshots, or arbitrary editor internals. A normal
+headless `SceneTree` process returns an explicit editor-unavailable error.
+Editor mode/context beyond the stable APIs listed above is intentionally not
+invented.
+
+---
+
+# Tool: list_scenes_in_project
+
+## Purpose
+
+Lists scene resources known to the Godot editor filesystem. It is read-only
+and batchable.
+
+## Parameters
+
+None.
+
+## Successful Result
+
+    {
+      "success": true,
+      "action": "list_scenes_in_project",
+      "count": 1,
+      "scenes": ["res://game_scene.tscn"],
+      "scanning": false,
+      "importing": false
+    }
+
+Paths are filtered by the editor's `PackedScene` resource type and sorted
+lexicographically. The tool does not instantiate or open scenes.
+
+## Limitations
+
+The editor resource filesystem is authoritative for this tool. While it is
+scanning or importing, the tool returns a structured not-ready failure
+instead of silently returning an incomplete list. Normal headless runtime
+processes do not provide this editor cache.
+
+---
+
+# Tool: get_undo_history_summary
+
+## Purpose
+
+Summarizes current editor undo/redo availability without performing undo or
+redo. It is read-only and batchable.
+
+## Parameters
+
+None.
+
+## Successful Result
+
+The response includes aggregate `undo_available`, `redo_available`, and
+`current_action_name` fields, plus per-history summaries for the global and
+edited-scene histories where available. Per-history summaries include
+`history_id`, action count, undo/redo flags, and the current action name.
+
+## Limitations
+
+The tool uses the injected `EditorUndoRedoManager` and does not expose raw
+undo objects or mutate history. A normal headless `SceneTree` process cannot
+obtain the plugin-owned manager and returns an explicit unavailable error.
+Separate undo/redo mutation tools remain future work.
+
+---
+
 # Tool: delete_node
 
 ## Purpose
