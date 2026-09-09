@@ -63,6 +63,17 @@ from agent.schemas import (
     RenameNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
+    MoveChildAction,
+    AddToGroupAction,
+    RemoveFromGroupAction,
+    ListConnectionsAction,
+    ConnectSignalAction,
+    DisconnectSignalAction,
+    CreateScriptAction,
+    AttachScriptAction,
+    DetachScriptAction,
+    GetScriptContentAction,
+    ListScriptDiagnosticsAction,
     ValidateNodeTypeAction,
 )
 
@@ -312,6 +323,132 @@ def _execute_duplicate_node(decision):
     )
 
 
+def _execute_move_child(decision):
+    return scene_tools.move_child(
+        node_path=(
+            decision.node_path
+        ),
+        new_index=(
+            decision.new_index
+        ),
+    )
+
+
+def _execute_add_to_group(decision):
+    return scene_tools.add_to_group(
+        node_path=(
+            decision.node_path
+        ),
+        group_name=(
+            decision.group_name
+        ),
+    )
+
+
+def _execute_remove_from_group(decision):
+    return scene_tools.remove_from_group(
+        node_path=(
+            decision.node_path
+        ),
+        group_name=(
+            decision.group_name
+        ),
+    )
+
+
+def _execute_list_node_connections(decision):
+    return scene_tools.list_node_connections(
+        node_path=(
+            decision.node_path
+        ),
+    )
+
+
+def _execute_connect_signal(decision):
+    return scene_tools.connect_signal(
+        node_path=(
+            decision.node_path
+        ),
+        signal_name=(
+            decision.signal_name
+        ),
+        target_path=(
+            decision.target_path
+        ),
+        method_name=(
+            decision.method_name
+        ),
+        deferred=(
+            decision.deferred
+            if decision.deferred is not None
+            else False
+        ),
+    )
+
+
+def _execute_disconnect_signal(decision):
+    return scene_tools.disconnect_signal(
+        node_path=(
+            decision.node_path
+        ),
+        signal_name=(
+            decision.signal_name
+        ),
+        target_path=(
+            decision.target_path
+        ),
+        method_name=(
+            decision.method_name
+        ),
+    )
+
+
+def _execute_create_script(decision):
+    return scene_tools.create_script(
+        script_path=(
+            decision.script_path
+        ),
+        content=(
+            decision.content
+        ),
+    )
+
+
+def _execute_attach_script(decision):
+    return scene_tools.attach_script(
+        node_path=(
+            decision.node_path
+        ),
+        script_path=(
+            decision.script_path
+        ),
+    )
+
+
+def _execute_detach_script(decision):
+    return scene_tools.detach_script(
+        node_path=(
+            decision.node_path
+        ),
+    )
+
+
+def _execute_get_script_content(decision):
+    return scene_tools.get_script_content(
+        script_path=(
+            decision.script_path
+        ),
+    )
+
+
+def _execute_list_script_diagnostics(decision):
+    return scene_tools.list_script_diagnostics(
+        script_path=(
+            decision.script_path
+        ),
+    )
+
+
 def _execute_describe_current_scene(decision):
     # Temporary prototype handler: vision is not connected yet,
     # so this returns a fixed placeholder instead of asking Godot.
@@ -520,6 +657,107 @@ _ACTION_SPECS = (
         ),
         is_mutation=True,
         handler=_execute_set_properties,
+    ),
+    ActionSpec(
+        name="move_child",
+        schema=MoveChildAction,
+        required_fields=(
+            "node_path",
+        ),
+        is_mutation=True,
+        handler=_execute_move_child,
+    ),
+    ActionSpec(
+        name="add_to_group",
+        schema=AddToGroupAction,
+        required_fields=(
+            "node_path",
+            "group_name",
+        ),
+        is_mutation=True,
+        handler=_execute_add_to_group,
+    ),
+    ActionSpec(
+        name="remove_from_group",
+        schema=RemoveFromGroupAction,
+        required_fields=(
+            "node_path",
+            "group_name",
+        ),
+        is_mutation=True,
+        handler=_execute_remove_from_group,
+    ),
+    ActionSpec(
+        name="list_node_connections",
+        schema=ListConnectionsAction,
+        required_fields=("node_path",),
+        is_mutation=False,
+        handler=_execute_list_node_connections,
+    ),
+    ActionSpec(
+        name="connect_signal",
+        schema=ConnectSignalAction,
+        required_fields=(
+            "node_path",
+            "signal_name",
+            "target_path",
+            "method_name",
+        ),
+        is_mutation=True,
+        handler=_execute_connect_signal,
+    ),
+    ActionSpec(
+        name="disconnect_signal",
+        schema=DisconnectSignalAction,
+        required_fields=(
+            "node_path",
+            "signal_name",
+            "target_path",
+            "method_name",
+        ),
+        is_mutation=True,
+        handler=_execute_disconnect_signal,
+    ),
+    ActionSpec(
+        name="create_script",
+        schema=CreateScriptAction,
+        required_fields=(
+            "script_path",
+            "content",
+        ),
+        is_mutation=True,
+        handler=_execute_create_script,
+    ),
+    ActionSpec(
+        name="attach_script",
+        schema=AttachScriptAction,
+        required_fields=(
+            "node_path",
+            "script_path",
+        ),
+        is_mutation=True,
+        handler=_execute_attach_script,
+    ),
+    ActionSpec(
+        name="detach_script",
+        schema=DetachScriptAction,
+        required_fields=("node_path",),
+        is_mutation=True,
+        handler=_execute_detach_script,
+    ),
+    ActionSpec(
+        name="get_script_content",
+        schema=GetScriptContentAction,
+        required_fields=("script_path",),
+        is_mutation=False,
+        handler=_execute_get_script_content,
+    ),
+    ActionSpec(
+        name="list_script_diagnostics",
+        schema=ListScriptDiagnosticsAction,
+        required_fields=("script_path",),
+        is_mutation=False,
+        handler=_execute_list_script_diagnostics,
     ),
     # --- Control actions (no tool dispatch; intercepted in the
     # main loop / orchestrated by execute_batch_actions) ---

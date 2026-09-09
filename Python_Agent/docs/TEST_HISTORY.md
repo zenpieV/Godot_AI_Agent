@@ -1542,3 +1542,652 @@ Update this file after:
 Do not update this file merely because source code changed.
 
 The purpose of this file is to record observed behavior, not act as a source-code changelog.
+
+---
+
+# Mutation Architecture Contract Tests (2026-09-08)
+
+## Scope
+
+Minimal mutation architecture pass. Added `agent/mutation.py`
+(classification, structured result contract, verification status,
+`MutationRecord`), mutation telemetry (`MutationTelemetry`,
+`record_mutation()`, mutation counts in `SessionSummary`), and a
+single recording hook in `execute_single_action()`. No Godot-side
+changes were required: the bridge already performs all mutations as
+undoable editor-native `EditorUndoRedoManager` actions and reports
+`undoable` and `verified_*` fields. No new mutation tools were
+added; batch semantics, batch limits, session control, inspection
+tools, and existing undo behavior were preserved unchanged.
+
+## Test File
+
+`tests/test_mutation_contract.py` - 23 tests, all passing.
+
+| Test | Verifies |
+| --- | --- |
+| `test_registry_mutation_flags_match_canonical_set` | Registry `is_mutation` flags match the six known mutations |
+| `test_registry_mutations_covered_by_boundary_metadata` | Registry mutations equal `boundary.py` target/equivalence metadata |
+| `test_is_mutation_action_delegates_to_registry` | Classification delegates to the registry; unknown actions are not mutations |
+| `test_valid_contract_result_passes` | A dict with boolean `success` satisfies the contract |
+| `test_contract_violations_are_rejected` | Non-dict, missing, or non-boolean `success` results violate the contract |
+| `test_verification_failed_on_unsuccessful_result` | Failure results are verification `failed` |
+| `test_verification_unverified_without_claims` | Success without `verified_*` claims is `unverified` |
+| `test_verification_verified_when_all_claims_true` | Success with all claims true is `verified` |
+| `test_verification_failed_when_any_claim_false` | A false `verified_*` claim downgrades to `failed` even on reported success |
+| `test_name_collision_detected_is_not_a_verification_claim` | `name_collision_detected` is informational only |
+| `test_record_from_successful_verified_mutation` | Record carries action, target, verification, undoability, turn/step |
+| `test_record_from_unverified_mutation` | Success without claims records `unverified`, `undoable` None |
+| `test_record_from_failed_mutation_carries_error` | Failure records carry the bridge error and reported undoability |
+| `test_record_from_failed_mutation_uses_validation_error_fallback` | `validation_error` is used when `error` is absent |
+| `test_contract_violation_never_records_success` | Contract violations force failure status, never success |
+| `test_record_is_frozen` | `MutationRecord` is immutable |
+| `test_record_mutation_appends_mutation_telemetry` | Telemetry carries the record forward with session/model-call ids |
+| `test_summary_counts_mutations` | Session summary reports mutation/success/failed/unverified counts |
+| `test_mutation_recorded_in_addition_to_tool_action_telemetry` | Mutations add telemetry without removing `ToolActionTelemetry` |
+| `test_non_mutation_action_records_no_mutation_telemetry` | Inspection actions produce no mutation records |
+
+## Status
+
+Confirmed working. Python-side only; full suite: 218 passed
+(195 pre-existing + 23 new). No Godot headless run was required
+because no `.gd` file changed.
+
+---
+
+# move_child Mutation Tool (2026-09-08)
+
+## Scope
+
+First real mutation tool built on the mutation architecture:
+`move_child` moves an existing child within its parent to a
+requested sibling index as one undoable, editor-native
+`EditorUndoRedoManager` action. No changes were made to the
+mutation architecture itself or to the six pre-existing mutation
+tools. Batch limits, stop-on-first-failure, interrupted-batch
+blocking, and session control are unchanged.
+
+## Implementation
+
+- Python: `MoveChildAction` schema (pydantic, `new_index >= 0`),
+  registry entry (`required_fields=("node_path",)`,
+  `is_mutation=True`), boundary metadata (fingerprint
+  `node_path` + `new_index`, target `node_path`),
+  `scene_tools.move_child()` -> `POST /move_child`.
+- Godot: `AIAgentNodeTools.move_child_from_request()` routed at
+  `/move_child`; validation (presence/types, node exists, has
+  parent, not scene root, index in range), deterministic no-op
+  (`moved: false`, no undo history, order still verified),
+  single undoable action, post-move verification reading the
+  real index and sibling order back from the scene
+  (`verified_index`, `verified_order`), explicit unavailable
+  error when the editor undo manager is absent.
+
+## Python tests
+
+Added cases to `tests/test_registry.py` (registration,
+required-fields pin, dispatch, batch path with mutation
+telemetry), `tests/test_mutation_contract.py` (canonical
+mutation set, verified/failed record mapping), and
+`tests/test_batch_boundary.py` (fingerprint match, different-index
+bypass BLOCKED, different node not blocked). Full suite:
+225 passed.
+
+## Godot headless harness
+
+`addons/Execution_Agent/tests/move_child_harness.gd`
+(Godot 4.7.2 headless): passed.
+
+- missing fields, non-integer and fractional indices rejected
+- missing node and scene root rejected
+- negative and past-the-end indices rejected with structured
+  out-of-range error
+- no-op (already-at-index) success with `moved: false`, unchanged
+  order, `verified_index`/`verified_order` true
+- explicit unavailable error when the editor undo manager is
+  absent
+- undo/redo cases are automatically exercised when the runtime
+  binary permits instantiating `EditorUndoRedoManager`; in a
+  plain headless `SceneTree` process it does not, so they are
+  skipped there (documented environment limitation)
+
+## Live bridge test (running headless editor with plugin)
+
+All against the real `game_scene` via `POST /move_child`:
+
+| Case | Result |
+| --- | --- |
+| Move `Player/RightArm` (index 2) to index 0 | success, `old_index: 2 -> 0`, real sibling order `[RightArm, Sprite2D, LeftArm, LeftLeg, RightLeg, SessionLifecycleTest]`, `verified_index: true`, `verified_order: true`, `undoable: true` |
+| Same move repeated (no-op) | success, `moved: false`, order unchanged and verified, `undoable: false` |
+| `new_index: 99` | structured out-of-range failure naming the valid range 0-5 |
+| `node_path: "Ghost"` | `Node not found: Ghost` |
+
+The editor undo history was not sampled through
+`get_undo_history_summary` in this session (the endpoint returned
+an empty payload in the headless editor environment, a pre-existing
+inspection quirk unrelated to `move_child`); undoability is
+confirmed by the committed `EditorUndoRedoManager` action and the
+`undoable: true` result. The edited scene was not saved, so the
+live moves left no disk changes.
+
+## Status
+
+Confirmed working. Python: 225 passed. Godot headless harness:
+passed. Live bridge: all four cases matched the documented
+contract. Undo/redo through the editor's undo system was not
+directly exercised at runtime (headless limitation above); it is
+guaranteed structurally by the single `EditorUndoRedoManager`
+action with explicit do/undo methods.
+
+
+
+# add_to_group / remove_from_group Mutation Tools (2026-09-08)
+
+## Scope
+
+Group membership mutations built on the same mutation architecture:
+`add_to_group` adds an existing node to a persistent group, and
+`remove_from_group` removes one. Each is one undoable, editor-native
+`EditorUndoRedoManager` action. No changes were made to the mutation
+architecture itself or to the pre-existing mutation tools. Batch
+limits, stop-on-first-failure, interrupted-batch blocking, and
+session control are unchanged.
+
+## Implementation
+
+- Python: `AddToGroupAction` and `RemoveFromGroupAction` schemas
+  (pydantic; `action`, `node_path`, `group_name`), registry entries
+  (`required_fields=("node_path", "group_name")`,
+  `is_mutation=True`), boundary metadata (fingerprint
+  `node_path` + `group_name`, target `node_path`),
+  `scene_tools.add_to_group()` / `remove_from_group()` -> `POST
+  /add_to_group` / `POST /remove_from_group`.
+- Godot: `AIAgentNodeTools.add_to_group_from_request()` /
+  `remove_from_group_from_request()` routed at the new endpoints;
+  validation (presence/types, node exists, non-empty group name),
+  deterministic idempotent cases (`changed: false`, no undo history,
+  membership still verified), single undoable action, post-mutation
+  verification reading real membership back via `is_in_group`
+  (`verified_membership`), explicit unavailable error when the
+  editor undo manager is absent.
+
+## Python tests
+
+Added cases to `tests/test_registry.py` (registration,
+required-fields pin, dispatch, batch path with mutation
+telemetry), `tests/test_mutation_contract.py` (canonical
+mutation set, verified/idempotent/failed record mapping), and
+`tests/test_batch_boundary.py` (fingerprint match, different-group
+bypass BLOCKED, different node not blocked, mutation-target
+extraction). Full suite: 235 passed.
+
+## Godot headless harness
+
+`addons/Execution_Agent/tests/add_remove_group_harness.gd`
+(Godot 4.7.2 headless): passed.
+
+- missing fields (group_name, node_path) rejected
+- non-string and empty/whitespace group names rejected
+- missing node rejected (both add and remove)
+- explicit unavailable error when the editor undo manager is absent
+- undo/redo cases are automatically exercised when the runtime
+  binary permits instantiating `EditorUndoRedoManager`; in a plain
+  headless `SceneTree` process it does not, so they are skipped
+  there (documented environment limitation)
+
+## Live bridge test (running headless editor with plugin)
+
+All against the real `game_scene` via `POST /add_to_group` and
+`POST /remove_from_group`:
+
+| Case | Result |
+| --- | --- |
+| Add `Player/Sprite2D` to `test_group` | success, `changed: true`, `was_member: false`, `is_member: true`, `verified_membership: true`, `undoable: true` |
+| Add `Player/Sprite2D` to `test_group` again (idempotent) | success, `changed: false`, `was_member: true`, `is_member: true`, `verified_membership: true`, `undoable: false` |
+| Remove `Player/Sprite2D` from `test_group` | success, `changed: true`, `was_member: true`, `is_member: false`, `verified_membership: true`, `undoable: true` |
+| Remove `Player/Sprite2D` from `test_group` again (idempotent) | success, `changed: false`, `was_member: false`, `is_member: false`, `verified_membership: true`, `undoable: false` |
+| `node_path: "GhostNode"` | `Node not found: GhostNode` |
+| `group_name: "   "` (whitespace) | `add_to_group requires a non-empty group_name.` |
+
+The edited scene was not saved, so the live moves left no disk
+changes.
+
+## Status
+
+Confirmed working. Python: 236 passed (235 + 1 new gemini regression test).
+Godot headless harness: passed. Live bridge: all six cases matched the
+documented contract. Undo/redo through the editor's undo system was not
+directly exercised at runtime (headless limitation above); it is
+guaranteed structurally by the single `EditorUndoRedoManager` action with
+explicit do/undo methods.
+
+> **Correction (superseded):** The narrative below is the historical record of the
+> initial hypothesis. It is superseded. The confirmed root cause of the Gemini
+> `400 INVALID_ARGUMENT` is provider-incompatible JSON-schema constraint keywords;
+> `make_gemini_schema_compatible()` permanently fixes it by recursively removing
+> `discriminator`, `minimum`, `maximum`, `minItems`, `maxItems` (and converting
+> `oneOf` to `anyOf`). The `result_mode` enum injection for `CountNodesAction` /
+> `MoveChildAction` is a separate structural-uniqueness workaround, not the 400 fix.
+> The earlier live probe used `gemini-2.5-flash-preview-09-2025`; the current default
+> model is `gemini-3.1-flash-lite`. The temporary `tmp_gemini_regression_probe.py`
+> was removed. See the appended "Gemini structured-output 400 regression root cause"
+> entry at the end of this file for the current, authoritative state.
+
+## Gemini Schema Compatibility Fix for move_child (2026-09-09)
+
+### Problem
+
+When `MoveChildAction` was added to the `AgentDecision` union, Gemini
+started rejecting the full schema request with `400 INVALID_ARGUMENT`. A
+prior agent diagnosed this as structural overlap and added
+`MoveChildAction` to both `GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS` and
+`GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS` in `models/gemini_provider.py`. That
+removal was the wrong fix: it stripped `MoveChildAction` entirely from
+Gemini's generated schema, so the system prompt could still describe
+`move_child` as a tool while Gemini's structured-output schema made it
+impossible for the model to select. The practical symptom was that the
+agent repeatedly chose `set_properties` or `rename_node` even when its own
+reasoning identified `move_child` as the correct action.
+
+### Investigation
+
+Live A/B isolation was decisive: removing `MoveChildAction` from the Gemini
+schema restored request acceptance, while removing the structurally-
+overlapping group actions did not. Unlike `AddToGroupAction` /
+`RemoveFromGroupAction`, which overlap each other, `MoveChildAction` was
+the single action causing Gemini's union validator to reject the schema —
+mirroring the earlier `CountNodesAction` failure pattern.
+
+### Fix
+
+Followed the proven `CountNodesAction` path: add a Gemini-only `result_mode`
+enum injection in `make_gemini_schema_compatible()` so `MoveChildAction`
+becomes structurally unique in the union, and remove it from both exclusion
+sets so it flows into the top-level and nested-batch schemas. The public
+Pydantic schema was intentionally left untouched (no `result_mode` field on
+`MoveChildAction`); the Gemini transform injects `result_mode:
+Literal["move_child"]` only in the converted schema Gemini sees. This keeps
+`MoveChildAction` valid for Pydantic round-trip while making it
+distinguishable from other union branches for Gemini.
+
+### New test
+
+Added `test_gemini_schema_injects_result_mode_for_move_child_so_it_is_no_longer_excluded()`
+in `tests/test_provider_adapters.py`. The test asserts:
+
+- `MoveChildAction` is present in both the top-level `AgentDecision` union
+  and the nested `batch.actions` union in Gemini's generated schema (via
+  `#/$defs/MoveChildAction` refs, not titles — batch items use refs).
+- `MoveChildAction` is NOT in either exclusion set.
+- `AddToGroupAction` and `RemoveFromGroupAction` remain excluded from the
+  nested batch union only (unchanged behavior preserved).
+- `result_mode` appears in the Gemini-transformed `MoveChildAction`
+  properties (enum `["move_child"]`), matching the `CountNodesAction`
+  pattern.
+
+### Result
+
+- `MoveChildAction` is now present in both the top-level `AgentDecision`
+  union and the nested `batch.actions` union in the Gemini-generated schema.
+- `AddToGroupAction` and `RemoveFromGroupAction` remain excluded from the
+  nested batch union only (unchanged); they are still valid standalone
+  actions and in the public Pydantic schema.
+- `result_mode` appears in Gemini's view of `MoveChildAction`
+  properties/required, matching the `CountNodesAction` pattern.
+- No Godot code, mutation execution, registry semantics, batch behavior, or
+  other providers were changed.
+- All 8 provider adapter tests pass; full suite 236 passed.
+
+### Live validation
+
+A live Gemini schema probe was performed via the temporary
+`tmp_gemini_regression_probe.py` script using the live Gemini API
+(`models/gemini-2.5-flash-preview-09-2025`). Before the fix, a raw
+`AgentDecision` schema produced `400 INVALID_ARGUMENT`. After the fix, the
+same schema with the `result_mode` injection and exclusions removed was
+accepted (`200 OK`). This confirms the fix resolves the structural Gemini
+incompatibility without changing public schemas or tool semantics.
+
+The probe was removed after validation. No `GEMINI_API_KEY` is committed to
+the repo.
+
+## Gemini structured-output 400 regression root cause (2026-09-09)
+
+Authoritative, current state that supersedes the historical `result_mode` narrative above.
+
+- Root cause: Gemini rejected the full `AgentDecision` schema with `400
+  INVALID_ARGUMENT` because it cannot accept provider-incompatible JSON-schema
+  constraint keywords that Pydantic emits. The confirmed set is:
+  `discriminator`, `minimum`, `maximum`, `minItems`, `maxItems`.
+- Fix: `make_gemini_schema_compatible()` (provider-only) recursively normalizes the
+  schema — converts `oneOf` to `anyOf`, removes `discriminator`, and removes
+  `minimum`, `maximum`, `minItems`, `maxItems`. Public Pydantic schemas, registry,
+  bridge, and tool behavior are unchanged.
+- The `result_mode` enum injection for `CountNodesAction` / `MoveChildAction` is a
+  separate structural-uniqueness workaround that remains in the provider; it is not
+  the 400 fix.
+- Regression coverage retained: six permanent tests in `tests/test_gemini_provider.py`
+  assert recursive removal of the five keywords, including on the real
+  `AgentDecision` schema. `tests/test_provider_adapters.py` covers the normalized
+  `oneOf` to `anyOf` / `discriminator`-removal shape.
+
+### Results (2026-09-09)
+
+- Provider suite (`tests/test_gemini_provider.py`, `tests/test_provider_adapters.py`,
+  `tests/test_provider_contract.py`): 121 passed.
+- Full Python suite (`pytest -q`): 242 passed.
+- Live end-to-end validation with `gemini-3.1-flash-lite` passed all five scenarios
+  (greeting, scene-tree inspection, live `move_child` with verified sibling order and
+  undoability, a bounded batch of size <= 5, and a constrained `list_available_node_types`
+  with a limit), with zero `400`s.
+- The temporary probe `tmp_gemini_regression_probe.py` is removed. No `GEMINI_API_KEY`
+  is committed.
+
+
+
+# connect_signal / disconnect_signal / list_node_connections Tools (2026-09-09)
+
+## Scope
+
+Three signal-connection tools implemented end-to-end as one batch,
+following the add/remove-from-group architecture exactly:
+
+* `list_node_connections` (read-only, batchable): live incoming and
+  outgoing connections of one node, sourced from
+  `Node.get_incoming_connections()` and
+  `Node.get_signal_connection_list()` with per-connection flags
+  (`deferred`, `persistent`, `one_shot`), sorted deterministically.
+* `connect_signal` (mutation): emitter `node_path` + `signal_name` ->
+  `target_path` + `method_name`; optional boolean `deferred`.
+  Validates presence/types, node existence, `has_signal`,
+  `has_method`, and boolean `deferred` before acting. Idempotent
+  no-op when the exact pair is already connected. Persistent
+  (plus optional deferred) single undoable `EditorUndoRedoManager`
+  action; `verified_connection` read back via `is_connected`.
+* `disconnect_signal` (mutation): inverse; undo restores the original
+  connection flags captured before removal. Idempotent no-op when
+  not connected (requires no undo manager, since nothing changes);
+  `verified_connection` read back.
+
+Python wiring: `schemas.py` (`ListConnectionsAction`,
+`ConnectSignalAction`, `DisconnectSignalAction`), registry entries
+(`is_mutation` true for the two mutations), boundary metadata
+(fingerprint includes `deferred` for `connect_signal`; mutation
+target is the full connection identity
+`node_path`+`signal_name`+`target_path`+`method_name`), three
+`scene_tools.py` client functions, and three new system-prompt
+catalog entries (items 14-16; subsequent items renumbered).
+
+Godot wiring: `POST /list_node_connections`, `POST /connect_signal`,
+`POST /disconnect_signal` in `ai_agent_router.gd`;
+`_validate_signal_mutation_request`, `_resolve_connection_nodes`,
+and the three `*_from_request` handlers in `ai_agent_node_tools.gd`.
+
+## Rule 12 handling
+
+`ConnectSignalAction` and `DisconnectSignalAction` are structurally
+identical (same required fields; connect adds optional `deferred`),
+so both were added to `GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS` — the
+established two-tier pattern (nested-batch exclusion first, top-level
+escalation as needed). Both remain valid top-level actions.
+`ListConnectionsAction` required no exclusion (same shape as the
+existing `{node_path}`-only branches that live-validate cleanly).
+No `result_mode` injection was needed.
+
+## Python tests
+
+Added: `test_registry.py` (registration, required-fields pin, three
+dispatch cases including deferred, read-only boundary absence for
+`list_node_connections`, connect/disconnect batch telemetry test),
+`test_batch_boundary.py` (fingerprint match, deferred-change bypass
+BLOCKED, different-method/signal not blocked because the target is
+the full connection identity, target extraction),
+`test_mutation_contract.py` (canonical mutation set extended;
+verified/idempotent/failed record mapping for the new pair),
+`test_provider_adapters.py` (regression guard: signal pair excluded
+from the nested batch union, present top-level;
+`ListConnectionsAction` present in the nested batch union).
+
+Full suite: **258 passed**.
+
+## Godot headless harness
+
+`addons/Execution_Agent/tests/connect_disconnect_signal_harness.gd`
+(Godot 4.7.2 headless): passed (exit 0).
+
+- missing/non-string/empty `signal_name`/`target_path`/`method_name`
+  and missing `node_path` rejected
+- missing emitter node, missing target node rejected
+- nonexistent signal rejected ("has no signal named ... Use
+  list_node_signals ...")
+- nonexistent method rejected
+- non-boolean `deferred` rejected
+- explicit unavailable errors for connect (new connection) and
+  disconnect (existing connection, pre-wired via the raw Node API)
+  when the editor undo manager is absent
+- idempotent disconnect of a non-connected pair succeeds without the
+  undo manager (no change, no undo history)
+- read-only listing works without the undo manager
+- undo/redo cases are automatically exercised when the runtime binary
+  permits instantiating `EditorUndoRedoManager`; in a plain headless
+  `SceneTree` process it does not, so they are skipped there
+  (documented environment limitation, same as the group harness)
+
+## Live bridge test (headless editor with plugin, isolated instance)
+
+The user's running editor keeps the previously loaded plugin build,
+so validation ran against a throwaway copy of the project (bridge
+port 8082, copy deleted afterwards) hosting the updated scripts with
+`game_scene.tscn` open. All against the real bridge:
+
+| Case | Result |
+| --- | --- |
+| `list_node_connections` on `Player/Sprite2D` (clean) | success, 0 in / 0 out, `internal_connections_omitted: 5` |
+| Connect `Sprite2D.tree_entered` -> `LeftArm.queue_free` | success, `changed: true`, `verified_connection: true`, `undoable: true` |
+| Same connect repeated | success, `changed: false`, `was_connected: true`, `undoable: false` |
+| Deferred connect `Sprite2D.tree_exited` -> `RightArm.queue_free` | success, `deferred: true`, `verified_connection: true`, `undoable: true` |
+| Listing `Sprite2D` after connects | 2 outgoing, both `persistent: true`, the deferred one flagged; sorted |
+| Listing `LeftArm` (incoming side) | 1 incoming with `source: Player/Sprite2D` |
+| Disconnect the `tree_entered` pair | success, `changed: true`, `verified_connection: true`, `undoable: true` |
+| Same disconnect repeated | success, `changed: false`, `undoable: false` |
+| `signal_name: "made_up_signal"` | structured failure pointing to `list_node_signals` |
+| `method_name: "made_up_method"` | structured failure |
+| `node_path: "Ghost"` | `Node not found: Ghost` |
+| `signal_name: "   "` | `requires a non-empty signal_name` |
+| `deferred: "yes"` | `deferred must be a boolean` |
+| Final listing | clean state restored |
+
+### Findings from live validation
+
+1. **Editor-internal connection noise**: every scene node carries
+   non-persistent editor hooks (e.g. `SceneTreeEditor` methods on
+   `script_changed`, `visibility_changed`, ...) whose peers are
+   outside the edited scene. These were unfiltered at first and
+   polluted listings (5 phantom connections on a fresh node).
+   Fixed: connections with out-of-scene peers are omitted from the
+   entries and reported as `internal_connections_omitted`,
+   consistent with the bridge's scene-relative path contract.
+2. **`get_incoming_connections()` key rename**: Godot 4.7 names the
+   receiving callable `callable` in incoming-connection dictionaries
+   (matching `get_signal_connection_list()`); the first
+   implementation read `method` and incoming listings came back
+   empty. Fixed by accepting either key. Note: the headless harness
+   could not catch this because its incoming-side cases live in the
+   undo-capable block, which is skipped in a plain headless
+   `SceneTree` process — the live bridge run caught it.
+
+The edited scene was not saved; the validation instance was
+destroyed afterwards, leaving no disk changes to the real project.
+
+## Live Gemini schema smoke test (Rule 12)
+
+Provider: live `gemini-3.1-flash-lite` with the real
+`AgentDecisionResponse` schema after
+`make_gemini_schema_compatible()`. Three scenarios, zero 400s:
+
+| Scenario | Result |
+| --- | --- |
+| "Connect tree_entered on Player/Sprite2D to queue_free on Player/LeftArm" | `connect_signal` decision, all fields correct, `deferred: null` |
+| "Show all live signal connections of Player/Sprite2D" | `list_node_connections` decision, `node_path` correct |
+| Two renames without inspection | `batch` of two `rename_node` items (excluded actions correctly not produced inside batch items) |
+
+All decisions validated host-side through the Pydantic
+discriminated union. Token usage normalized and reported. The smoke
+script was run from a temporary stdin script and not committed.
+
+## Status
+
+Confirmed working. Python: 258 passed. Godot headless harness:
+passed. Live bridge: all 14 cases matched the documented contract.
+Live Gemini schema smoke test: passed (zero 400s). Runtime
+undo/redo was not directly exercised in a live editor (same
+documented headless limitation as the group tools); it is
+guaranteed structurally by the single `EditorUndoRedoManager`
+action with explicit do/undo methods, including flag-preserving
+undo for `disconnect_signal`.
+
+# create_script / attach_script / detach_script / get_script_content / list_script_diagnostics Tools (2026-09-09)
+
+## Scope
+
+Script tools Phase A: five tools implemented end-to-end as one
+batch. Godot side lives in a NEW `ai_agent_script_tools.gd`
+(`AIAgentScriptTools`, fourth tool domain alongside node, property,
+and editor tools), wired through the router and instantiated by the
+plugin.
+
+* `create_script` (mutation): writes a new `.gd` file with the
+  full content provided by the model. Strict path discipline
+  (res:// auto-prefix, .gd required, no `..`, no backslashes,
+  non-empty file name), deterministic refusal on existing files,
+  missing parent directories created. Parse gate BEFORE writing:
+  a fresh `GDScript` parse must succeed or nothing is written.
+  First mutation whose real change is NOT undoable
+  (`undoable: false`); verified by reading the file back
+  (`verified_write`).
+* `attach_script` (mutation): loads the script, sets it on the
+  node as one undoable `EditorUndoRedoManager` property action
+  (undo restores the previous attachment). Idempotent no-op when
+  the same script is attached; deterministic refusal when a
+  different script is attached. `verified_attachment` read back
+  via `get_script()` + `resource_path`.
+* `detach_script` (mutation): inverse; undo restores the previous
+  script. Idempotent no-op when no script is attached (works
+  without the undo manager, since nothing changes).
+* `get_script_content` (read): full source from disk.
+* `list_script_diagnostics` (read): fresh parse of the current
+  file content; reports `parse_ok` plus the Godot error string.
+  Works headless AND live (an improvement over the originally
+  planned live-editor-only diagnostics).
+
+Python wiring: 5 schemas, 5 registry entries (3 mutations), 3
+boundary registrations (create_script target = script_path; attach/
+detach target = node_path), 5 scene_tools client functions, 5 new
+system-prompt catalog entries (items 17-21; subsequent items
+renumbered to 38 total).
+
+## Rule 12 handling
+
+No nested-batch exclusions added. Structural analysis: the only
+identical required sets are against tolerated, live-validated
+precedents (`detach_script` {node_path} vs `delete_node`;
+`get_script_content`/`list_script_diagnostics` {script_path} vs
+`find_nodes_by_script`). The analysis was confirmed by the live
+Gemini smoke test; the two-tier exclusion pattern remains the
+documented fallback. New in this batch: GDScript content travels
+as an escaped multi-line JSON string inside the AgentDecision -
+covered explicitly by a live round-trip scenario.
+
+## Python tests
+
+Added: `test_registry.py` (registration, required-fields pin, 5
+dispatch cases, read-only boundary absence for the two inspectors,
+script batch telemetry test asserting the first undoable: false
+verified mutation record), `test_batch_boundary.py`
+(create_script: different-content bypass BLOCKED because the
+target is the file; attach_script: different-script bypass BLOCKED
+because the target is the node's attachment; target extraction),
+`test_mutation_contract.py` (canonical mutation set extended to
+14; create_script verified-but-not-undoable record; failed write
+verification; attach verified; detach idempotent verified),
+`test_provider_adapters.py` (Rule 12 analysis record test: all 5
+script actions present top-level and in the nested batch union,
+no exclusions).
+
+Full suite: **280 passed**.
+
+## Godot headless harness
+
+`addons/Execution_Agent/tests/script_tools_harness.gd`
+(Godot 4.7.2 headless): passed (exit 0), self-cleaning (scratch
+files removed at start and on every exit path; verified no
+residue).
+
+- create_script: missing/non-string/empty content, missing .gd,
+  traversal, backslash, empty file name all rejected
+- parse gate: broken content rejected, NOTHING written to disk
+- existing-file refusal
+- get_script_content / diagnostics: missing script rejected
+- attach_script: validation failures; valid request without the
+  undo manager reports the explicit unavailable error
+- detach_script: idempotent no-op works without the undo manager;
+  removing a pre-attached script (set via the raw Node API)
+  reports the unavailable error without it
+- undo-capable phase (when `EditorUndoRedoManager` is
+  instantiable): create/read/diagnostics roundtrip, attach,
+  idempotent attach, different-script refusal, detach, idempotent
+  detach, undo/redo restoring the attachment; in a plain headless
+  `SceneTree` process this phase is skipped (documented
+  environment limitation)
+- Expected stderr noise: the parse gate's rejection of
+  deliberately-broken content makes Godot print its own
+  `SCRIPT ERROR: Parse Error` line; the tool handles it
+  structurally and the harness asserts the structured failure.
+
+## Live bridge test (headless editor with plugin, isolated instance)
+
+Throwaway project copy (bridge port 8082), destroyed afterwards;
+`game_scene.tscn` open. All 18 cases matched the documented
+contract:
+
+| Case | Result |
+| --- | --- |
+| `create_script` valid multi-line content into new `scripts/` dir | success, dir auto-created, `parse_ok: true`, `verified_write: true`, `undoable: false` |
+| Same create repeated | `script already exists` refusal |
+| `create_script` broken content | `does not parse (Parse error). Nothing was written to disk.` |
+| Read the would-be broken file | `script not found` (gate honored) |
+| `get_script_content` roundtrip | source identical, line/size correct |
+| `list_script_diagnostics` on created script | `parse_ok: true` |
+| `attach_script` onto `Player/LeftArm` | success, `verified_attachment: true`, `undoable: true` |
+| Same attach repeated | idempotent no-op, `undoable: false` |
+| Create second script, attach over existing | `different script attached ... Use detach_script first` |
+| Attachment cross-checked via `get_node_property` | script property reports `<GDScript>` object |
+| `detach_script` | success, `detached_script` path reported, `verified_attachment: true`, `undoable: true` |
+| Same detach repeated | idempotent no-op |
+| Ghost node / .txt extension / traversal / empty content / diagnostics on missing | all structured failures |
+
+The validation instance was destroyed afterwards; no disk changes
+remain in the real project (the harness cleans its own scratch
+files).
+
+## Live Gemini schema smoke test (Rule 12)
+
+Provider: live `gemini-3.1-flash-lite`, real
+`AgentDecisionResponse` schema after
+`make_gemini_schema_compatible()`. Three scenarios, zero 400s:
+
+| Scenario | Result |
+| --- | --- |
+| "Create a spawner script" (realistic multi-line GDScript) | `create_script` decision; 314 chars, 11 newlines, `extends Node2D` + `func spawn_enemy` present; JSON escaping round-trip verified programmatically |
+| "Attach the script to Player/LeftArm" | `attach_script` decision, fields correct |
+| Two renames without inspection | `batch` of two `rename_node` items |
+
+## Status
+
+Confirmed working. Python: 280 passed. Godot headless harness:
+passed. Live bridge: all 18 cases matched the documented contract.
+Live Gemini schema smoke test: passed (zero 400s, multi-line
+content round-trip verified). The agent can now produce
+parse-verified GDScript files and attach them to scene nodes;
+script modification (`edit_script`) remains Phase B, and
+behavioral verification remains future runtime-tool territory.

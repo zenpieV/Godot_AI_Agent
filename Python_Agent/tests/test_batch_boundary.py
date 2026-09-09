@@ -17,6 +17,14 @@ from agent.schemas import (
     DeleteNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
+    MoveChildAction,
+    AddToGroupAction,
+    RemoveFromGroupAction,
+    ConnectSignalAction,
+    DisconnectSignalAction,
+    CreateScriptAction,
+    AttachScriptAction,
+    DetachScriptAction,
 )
 
 
@@ -72,6 +80,82 @@ def _set_props(path, props):
         action="set_properties",
         node_path=path,
         properties_json=props,
+    )
+
+
+def _move_child(path, new_index):
+    return MoveChildAction(
+        reason="r",
+        action="move_child",
+        node_path=path,
+        new_index=new_index,
+    )
+
+
+def _add_to_group(path, group_name):
+    return AddToGroupAction(
+        reason="r",
+        action="add_to_group",
+        node_path=path,
+        group_name=group_name,
+    )
+
+
+def _remove_from_group(path, group_name):
+    return RemoveFromGroupAction(
+        reason="r",
+        action="remove_from_group",
+        node_path=path,
+        group_name=group_name,
+    )
+
+
+def _connect_signal(path, signal_name, target_path, method_name, deferred=None):
+    return ConnectSignalAction(
+        reason="r",
+        action="connect_signal",
+        node_path=path,
+        signal_name=signal_name,
+        target_path=target_path,
+        method_name=method_name,
+        deferred=deferred,
+    )
+
+
+def _disconnect_signal(path, signal_name, target_path, method_name):
+    return DisconnectSignalAction(
+        reason="r",
+        action="disconnect_signal",
+        node_path=path,
+        signal_name=signal_name,
+        target_path=target_path,
+        method_name=method_name,
+    )
+
+
+def _create_script(script_path, content):
+    return CreateScriptAction(
+        reason="r",
+        action="create_script",
+        script_path=script_path,
+        content=content,
+    )
+
+
+def _attach_script(node_path, script_path):
+    return AttachScriptAction(
+        reason="r",
+        action="attach_script",
+        node_path=node_path,
+        script_path=script_path,
+    )
+
+
+def _detach_script(node_path):
+    return DetachScriptAction(
+        reason="r",
+        action="detach_script",
+        node_path=node_path,
     )
 
 
@@ -393,10 +477,296 @@ def test_mutation_target_extraction():
     target = extract_mutation_target(delete_action)
     assert target == ("delete_node", (("node_path", "SomeNode"),))
 
+    move_action = _move_child("SomeNode", 2)
+    target = extract_mutation_target(move_action)
+    assert target == ("move_child", (("node_path", "SomeNode"),))
+
+    add_action = _add_to_group("SomeNode", "enemies")
+    target = extract_mutation_target(add_action)
+    assert target == (
+        "add_to_group",
+        (("node_path", "SomeNode"),),
+    )
+
+    remove_action = _remove_from_group("SomeNode", "enemies")
+    target = extract_mutation_target(remove_action)
+    assert target == (
+        "remove_from_group",
+        (("node_path", "SomeNode"),),
+    )
+
     # Read-only action: target has empty fields
     find_action = _find("Something")
     target = extract_mutation_target(find_action)
     assert target == ("find_nodes", ())
+
+
+def test_move_child_fingerprint_matches_skipped():
+    skipped = _move_child("Player", 0)
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _move_child("Player", 0)
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_move_child_different_index_BLOCKED():
+    """
+    Bypass attempt: same node_path but a different new_index.
+    Must be BLOCKED by mutation-target enforcement even though
+    the exact fingerprint differs.
+    """
+    skipped = _move_child("Player", 0)
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _move_child("Player", 2)
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_move_child_different_node_not_blocked():
+    skipped = _move_child("Player", 0)
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _move_child("Enemy", 0)
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+
+def test_add_to_group_fingerprint_matches_skipped():
+    skipped = _add_to_group("Player", "enemies")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _add_to_group("Player", "enemies")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_add_to_group_different_group_BLOCKED():
+    """
+    Bypass attempt: same node_path but a different group_name.
+    Must be BLOCKED by mutation-target enforcement even though
+    the exact fingerprint differs.
+    """
+    skipped = _add_to_group("Player", "enemies")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _add_to_group("Player", "allies")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_add_to_group_different_node_not_blocked():
+    skipped = _add_to_group("Player", "enemies")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _add_to_group("Enemy", "enemies")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_remove_from_group_fingerprint_matches_skipped():
+    skipped = _remove_from_group("Player", "enemies")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _remove_from_group("Player", "enemies")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_remove_from_group_different_group_BLOCKED():
+    skipped = _remove_from_group("Player", "enemies")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _remove_from_group("Player", "allies")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_remove_from_group_different_node_not_blocked():
+    skipped = _remove_from_group("Player", "enemies")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _remove_from_group("Enemy", "enemies")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_connect_signal_fingerprint_matches_skipped():
+    skipped = _connect_signal("Player", "pressed", "Enemy", "on_pressed")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _connect_signal("Player", "pressed", "Enemy", "on_pressed")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_connect_signal_different_method_not_blocked():
+    """
+    A different method is a DIFFERENT connection resource, not a
+    bypass: the mutation target covers the full connection identity
+    (node_path, signal_name, target_path, method_name).
+    """
+    skipped = _connect_signal("Player", "pressed", "Enemy", "on_pressed")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _connect_signal("Player", "pressed", "Enemy", "on_timeout")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_connect_signal_deferred_change_BLOCKED():
+    """
+    Bypass attempt: same connection identity but deferred toggled.
+    Must be BLOCKED by mutation-target enforcement even though the
+    exact fingerprint differs.
+    """
+    skipped = _connect_signal(
+        "Player", "pressed", "Enemy", "on_pressed", deferred=False
+    )
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _connect_signal(
+        "Player", "pressed", "Enemy", "on_pressed", deferred=True
+    )
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_disconnect_signal_fingerprint_matches_skipped():
+    skipped = _disconnect_signal("Player", "pressed", "Enemy", "on_pressed")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _disconnect_signal("Player", "pressed", "Enemy", "on_pressed")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_disconnect_signal_different_signal_not_blocked():
+    skipped = _disconnect_signal("Player", "pressed", "Enemy", "on_pressed")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _disconnect_signal("Player", "timeout", "Enemy", "on_pressed")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_signal_mutation_target_extraction():
+    """connect_signal/disconnect_signal targets cover the connection
+    identity, not the desired result state."""
+    connect_action = _connect_signal(
+        "Player", "pressed", "Enemy", "on_pressed"
+    )
+    target = extract_mutation_target(connect_action)
+    assert target == (
+        "connect_signal",
+        (
+            ("node_path", "Player"),
+            ("signal_name", "pressed"),
+            ("target_path", "Enemy"),
+            ("method_name", "on_pressed"),
+        ),
+    )
+
+    disconnect_action = _disconnect_signal(
+        "Player", "pressed", "Enemy", "on_pressed"
+    )
+    target = extract_mutation_target(disconnect_action)
+    assert target == (
+        "disconnect_signal",
+        (
+            ("node_path", "Player"),
+            ("signal_name", "pressed"),
+            ("target_path", "Enemy"),
+            ("method_name", "on_pressed"),
+        ),
+    )
+
+
+def test_create_script_fingerprint_matches_skipped():
+    skipped = _create_script("res://scripts/a.gd", "extends Node\n")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _create_script("res://scripts/a.gd", "extends Node\n")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_create_script_different_content_BLOCKED():
+    """
+    Bypass attempt: same script_path but different content. Must be
+    BLOCKED by mutation-target enforcement (target is the script
+    file) even though the exact fingerprint differs.
+    """
+    skipped = _create_script("res://scripts/a.gd", "extends Node\n")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _create_script("res://scripts/a.gd", "extends Node2D\n")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_create_script_different_path_not_blocked():
+    skipped = _create_script("res://scripts/a.gd", "extends Node\n")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _create_script("res://scripts/b.gd", "extends Node\n")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_attach_script_fingerprint_matches_skipped():
+    skipped = _attach_script("Player", "res://scripts/a.gd")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _attach_script("Player", "res://scripts/a.gd")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_attach_script_different_script_BLOCKED():
+    """
+    Bypass attempt: same node but a different script_path. Must be
+    BLOCKED by mutation-target enforcement (target is the node's
+    script attachment) even though the exact fingerprint differs.
+    """
+    skipped = _attach_script("Player", "res://scripts/a.gd")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _attach_script("Player", "res://scripts/b.gd")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_attach_script_different_node_not_blocked():
+    skipped = _attach_script("Player", "res://scripts/a.gd")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _attach_script("Enemy", "res://scripts/a.gd")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_detach_script_fingerprint_matches_skipped():
+    skipped = _detach_script("Player")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _detach_script("Player")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_detach_script_different_node_not_blocked():
+    skipped = _detach_script("Player")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _detach_script("Enemy")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_script_mutation_target_extraction():
+    """Script mutation targets: the file for create_script, the
+    node's attachment for attach/detach."""
+    create_action = _create_script("res://scripts/a.gd", "extends Node\n")
+    target = extract_mutation_target(create_action)
+    assert target == (
+        "create_script",
+        (("script_path", "res://scripts/a.gd"),),
+    )
+
+    attach_action = _attach_script("Player", "res://scripts/a.gd")
+    target = extract_mutation_target(attach_action)
+    assert target == (
+        "attach_script",
+        (("node_path", "Player"),),
+    )
+
+    detach_action = _detach_script("Player")
+    target = extract_mutation_target(detach_action)
+    assert target == (
+        "detach_script",
+        (("node_path", "Player"),),
+    )
 
 if __name__ == "__main__":
     test_rename_fingerprint_matches_skipped()
@@ -423,4 +793,28 @@ if __name__ == "__main__":
     test_reparent_different_target_BLOCKED()
     test_delete_same_node_BLOCKED()
     test_mutation_target_extraction()
+    test_move_child_fingerprint_matches_skipped()
+    test_move_child_different_index_BLOCKED()
+    test_move_child_different_node_not_blocked()
+    test_connect_signal_fingerprint_matches_skipped()
+    test_connect_signal_different_method_not_blocked()
+    test_connect_signal_deferred_change_BLOCKED()
+    test_disconnect_signal_fingerprint_matches_skipped()
+    test_disconnect_signal_different_signal_not_blocked()
+    test_signal_mutation_target_extraction()
+    test_create_script_fingerprint_matches_skipped()
+    test_create_script_different_content_BLOCKED()
+    test_create_script_different_path_not_blocked()
+    test_attach_script_fingerprint_matches_skipped()
+    test_attach_script_different_script_BLOCKED()
+    test_attach_script_different_node_not_blocked()
+    test_detach_script_fingerprint_matches_skipped()
+    test_detach_script_different_node_not_blocked()
+    test_script_mutation_target_extraction()
+    test_add_to_group_fingerprint_matches_skipped()
+    test_add_to_group_different_group_BLOCKED()
+    test_add_to_group_different_node_not_blocked()
+    test_remove_from_group_fingerprint_matches_skipped()
+    test_remove_from_group_different_group_BLOCKED()
+    test_remove_from_group_different_node_not_blocked()
     print("All boundary enforcement tests PASSED")

@@ -560,6 +560,793 @@ If the renamed node will be used again, its new path should be resolved or deter
 
 ---
 
+# Tool: move_child
+
+## Purpose
+
+Moves an existing child node within its parent to a requested
+sibling index, changing sibling order without changing the parent.
+
+The Godot editor handles this as one undoable
+`EditorUndoRedoManager` action ("AI Agent: Move \<name\> to index \<n\>").
+
+## Request
+
+```json
+{
+  "action": "move_child",
+  "reason": "Move RightArm above the sprite.",
+  "node_path": "Player/RightArm",
+  "new_index": 0
+}
+```
+
+- `node_path`: scene-relative path of the child to move.
+- `new_index`: target sibling index within the parent,
+  `0 <= new_index < child_count`. Rejected outside the range.
+
+## Validation (Godot side, in order)
+
+1. `node_path` and `new_index` present; `new_index` must be an
+   integer (integral floats accepted, fractional values rejected).
+2. Node must exist.
+3. The scene root cannot be moved; the node must have a parent.
+4. `new_index` must be in `[0, child_count - 1]`.
+
+## No-op semantics
+
+If the node is already at `new_index`, the tool returns success
+with `"moved": false` and `"undoable": false`. No undo history is
+created and no scene state changes; the sibling order is still
+read back and verified.
+
+## Success response
+
+```json
+{
+  "action": "move_child",
+  "message": "Node moved successfully in the Godot editor.",
+  "moved": true,
+  "node_name": "RightArm",
+  "node_path": "Player/RightArm",
+  "old_index": 2,
+  "new_index": 0,
+  "requested_index": 0,
+  "parent_path": "Player",
+  "sibling_order_before": ["Sprite2D", "LeftArm", "RightArm", "LeftLeg", "RightLeg", "SessionLifecycleTest"],
+  "sibling_order_after": ["RightArm", "Sprite2D", "LeftArm", "LeftLeg", "RightLeg", "SessionLifecycleTest"],
+  "verified_index": true,
+  "verified_order": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+- `sibling_order_after` is read back from the real scene after the
+  move; `verified_order` compares it against the expected order
+  computed by simulating the move on `sibling_order_before`.
+  Verification is never fabricated.
+- `verified_index` is `false` if the node's actual index after the
+  move differs from the requested index (treated as a verification
+  failure by the Python mutation contract).
+
+## Failure response
+
+```json
+{
+  "error": "move_child new_index 99 is out of range: the parent Player has 6 child(ren); valid indices are 0 to 5.",
+  "success": false
+}
+```
+
+A headless process without the plugin-owned
+`EditorUndoRedoManager` receives an explicit unavailable error
+instead of mutating without undo support.
+
+---
+
+# Tool: add_to_group
+
+## Purpose
+
+Adds an existing node in the currently edited scene to a persistent
+group. Group membership is instance state on the node.
+
+The Godot editor handles this as one undoable
+`EditorUndoRedoManager` action ("AI Agent: Add \<name\> to group
+\<group\>").
+
+## Request
+
+```json
+{
+  "action": "add_to_group",
+  "reason": "Mark Sprite2D as a damageable target.",
+  "node_path": "Player/Sprite2D",
+  "group_name": "damageable"
+}
+```
+
+- `node_path`: scene-relative path of the node to add.
+- `group_name`: non-empty group name (whitespace-stripped).
+
+## Validation (Godot side, in order)
+
+1. `group_name` present and a non-empty string (after stripping).
+2. `node_path` present.
+3. Node must exist.
+
+## Idempotent semantics
+
+If the node is already in `group_name`, the tool returns success with
+`"changed": false` and `"undoable": false`. No undo history is created
+and no scene state changes; membership is still read back from the
+node and verified.
+
+## Success response
+
+```json
+{
+  "action": "add_to_group",
+  "message": "Node added to group successfully in the Godot editor.",
+  "changed": true,
+  "node_name": "Sprite2D",
+  "node_path": "Player/Sprite2D",
+  "group_name": "damageable",
+  "was_member": false,
+  "is_member": true,
+  "verified_membership": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+- `is_member` is read back from the real node after the change;
+  `verified_membership` is `true` only when the actual membership
+  matches the expected post-add state. Verification is never
+  fabricated.
+
+## Failure response
+
+```json
+{
+  "error": "add_to_group requires a non-empty group_name.",
+  "success": false
+}
+```
+
+A headless process without the plugin-owned
+`EditorUndoRedoManager` receives an explicit unavailable error
+instead of mutating without undo support.
+
+---
+
+# Tool: remove_from_group
+
+## Purpose
+
+Removes an existing node in the currently edited scene from a
+persistent group.
+
+The Godot editor handles this as one undoable
+`EditorUndoRedoManager` action ("AI Agent: Remove \<name\> from group
+\<group\>").
+
+## Request
+
+```json
+{
+  "action": "remove_from_group",
+  "reason": "Sprite2D should no longer be damageable.",
+  "node_path": "Player/Sprite2D",
+  "group_name": "damageable"
+}
+```
+
+- `node_path`: scene-relative path of the node to remove.
+- `group_name`: non-empty group name (whitespace-stripped).
+
+## Validation (Godot side, in order)
+
+1. `group_name` present and a non-empty string (after stripping).
+2. `node_path` present.
+3. Node must exist.
+
+## Idempotent semantics
+
+If the node is not in `group_name`, the tool returns success with
+`"changed": false` and `"undoable": false`. No undo history is created
+and no scene state changes; membership is still read back from the
+node and verified.
+
+## Success response
+
+```json
+{
+  "action": "remove_from_group",
+  "message": "Node removed from group successfully in the Godot editor.",
+  "changed": true,
+  "node_name": "Sprite2D",
+  "node_path": "Player/Sprite2D",
+  "group_name": "damageable",
+  "was_member": true,
+  "is_member": false,
+  "verified_membership": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+- `is_member` is read back from the real node after the change;
+  `verified_membership` is `true` only when the actual membership
+  matches the expected post-remove state. Verification is never
+  fabricated.
+
+## Failure response
+
+```json
+{
+  "error": "remove_from_group requires a non-empty group_name.",
+  "success": false
+}
+```
+
+A headless process without the plugin-owned
+`EditorUndoRedoManager` receives an explicit unavailable error
+instead of mutating without undo support.
+
+---
+
+
+# Tool: list_node_connections
+
+## Purpose
+
+Lists the live signal connections of one node in the currently
+edited scene, in both directions. Complements `list_node_signals`,
+which reports the signal definitions but never connection state.
+
+The result answers from the node's real connection state
+(`get_incoming_connections` and `get_signal_connection_list`).
+No scene state is modified.
+
+## Request
+
+```json
+{
+  "action": "list_node_connections",
+  "reason": "Audit how Sprite2D is wired before rewiring.",
+  "node_path": "Player/Sprite2D"
+}
+```
+
+- `node_path`: scene-relative path (use `.` for the scene root).
+
+## Successful Result
+
+```json
+{
+  "action": "list_node_connections",
+  "node_path": "Player/Sprite2D",
+  "node_name": "Sprite2D",
+  "node_type": "Sprite2D",
+  "total_incoming": 1,
+  "total_outgoing": 2,
+  "internal_connections_omitted": 5,
+  "incoming": [
+    {
+      "signal": "tree_entered",
+      "source": "Player/Sprite2D",
+      "source_name": "Sprite2D",
+      "method": "queue_free",
+      "deferred": false,
+      "persistent": true,
+      "one_shot": false
+    }
+  ],
+  "outgoing": [
+    {
+      "signal": "tree_exited",
+      "target": "Player/RightArm",
+      "target_name": "RightArm",
+      "method": "queue_free",
+      "deferred": true,
+      "persistent": true,
+      "one_shot": false
+    }
+  ],
+  "success": true
+}
+```
+
+- Entries are sorted by signal name, then peer path, then method
+  name, for deterministic output.
+- `deferred` / `persistent` / `one_shot` are read from the real
+  connection flags.
+
+## Editor-internal connection filtering
+
+Inside a running editor every node carries non-persistent editor
+plumbing (for example `SceneTreeEditor` hooks into
+`script_changed`). Connections whose peer node lies outside the
+edited scene are omitted from `incoming`/`outgoing` and reported
+only as `internal_connections_omitted`, keeping the bridge's
+scene-relative path contract. Nothing is silently hidden.
+
+## Failure response
+
+```json
+{
+  "error": "Node not found: Ghost",
+  "success": false
+}
+```
+
+This tool is read-only and works without the editor undo manager.
+
+---
+
+
+# Tool: connect_signal
+
+## Purpose
+
+Connects a signal on one existing node (the emitter) to a method
+on another existing node (the receiver). Connections are addressed
+exactly like the editor's Connect dialog: emitter node path +
+signal name -> receiver node path + method name. Callable
+expressions and bound arguments are deliberately not supported.
+
+The Godot editor handles an actual change as one undoable
+`EditorUndoRedoManager` action ("AI Agent: Connect \<emitter\>.
+\<signal\> to \<receiver\>.\<method\>"). Connections are created
+persistent (so they serialize with the scene, matching editor-made
+wiring) and optionally deferred.
+
+## Request
+
+```json
+{
+  "action": "connect_signal",
+  "reason": "Spawn an enemy whenever the timer ticks.",
+  "node_path": "SpawnTimer",
+  "signal_name": "timeout",
+  "target_path": "EnemySpawner",
+  "method_name": "spawn_enemy",
+  "deferred": false
+}
+```
+
+- `node_path`: emitter node (scene-relative).
+- `signal_name`: non-empty signal name (whitespace-stripped).
+- `target_path`: receiver node (scene-relative).
+- `method_name`: non-empty method name (whitespace-stripped).
+- `deferred`: optional boolean (default false).
+
+## Validation (Godot side, in order)
+
+1. `signal_name`, `target_path`, `method_name` present, strings,
+   non-empty.
+2. `node_path` present.
+3. Emitter node must exist; receiver node must exist.
+4. Emitter must actually have the signal (`has_signal`) - the
+   error points to `list_node_signals`.
+5. Receiver must actually have the method (`has_method`).
+6. `deferred`, if present, must be a boolean.
+
+## Idempotent semantics
+
+If the exact pair (same signal, same receiver, same method) is
+already connected, the tool returns success with `"changed": false`
+and `"undoable": false`. No undo history is created; the
+connection is still read back from the emitter and verified.
+
+## Success response
+
+```json
+{
+  "action": "connect_signal",
+  "message": "Signal connected successfully in the Godot editor.",
+  "node_path": "SpawnTimer",
+  "node_name": "SpawnTimer",
+  "signal_name": "timeout",
+  "target_path": "EnemySpawner",
+  "target_name": "EnemySpawner",
+  "method_name": "spawn_enemy",
+  "deferred": false,
+  "was_connected": false,
+  "is_connected": true,
+  "changed": true,
+  "verified_connection": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+- `is_connected` is read back from the real emitter after the
+  change; `verified_connection` is `true` only when the actual
+  connection state matches the expected post-connect state.
+
+## Failure response
+
+```json
+{
+  "error": "connect_signal: node Sprite2D has no signal named made_up_signal. Use list_node_signals to discover valid signal names.",
+  "success": false
+}
+```
+
+A headless process without the plugin-owned
+`EditorUndoRedoManager` receives an explicit unavailable error
+instead of mutating without undo support.
+
+---
+
+
+# Tool: disconnect_signal
+
+## Purpose
+
+Removes an existing signal connection between two nodes.
+
+The Godot editor handles an actual change as one undoable
+`EditorUndoRedoManager` action ("AI Agent: Disconnect \<emitter\>.
+\<signal\> from \<receiver\>.\<method\>"); the undo restores the
+original connection including its exact flags.
+
+## Request
+
+```json
+{
+  "action": "disconnect_signal",
+  "reason": "This stale wiring fires the old handler.",
+  "node_path": "SpawnTimer",
+  "signal_name": "timeout",
+  "target_path": "EnemySpawner",
+  "method_name": "spawn_enemy"
+}
+```
+
+- Same fields as `connect_signal`, without `deferred`.
+
+## Validation (Godot side, in order)
+
+1. `signal_name`, `target_path`, `method_name` present, strings,
+   non-empty.
+2. `node_path` present.
+3. Emitter node must exist; receiver node must exist.
+4. Emitter must actually have the signal; receiver must actually
+   have the method.
+
+## Idempotent semantics
+
+If the pair is not connected, the tool returns success with
+`"changed": false` and `"undoable": false`. No undo history is
+created; the state is still read back and verified. Because this
+case needs no undo support, it also works in processes without
+the editor undo manager.
+
+## Success response
+
+```json
+{
+  "action": "disconnect_signal",
+  "message": "Signal disconnected successfully in the Godot editor.",
+  "node_path": "SpawnTimer",
+  "node_name": "SpawnTimer",
+  "signal_name": "timeout",
+  "target_path": "EnemySpawner",
+  "target_name": "EnemySpawner",
+  "method_name": "spawn_enemy",
+  "was_connected": true,
+  "is_connected": false,
+  "changed": true,
+  "verified_connection": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+- `verified_connection` is `true` only when the actual connection
+  state matches the expected post-disconnect state.
+
+## Failure response
+
+```json
+{
+  "error": "disconnect_signal: node EnemySpawner has no method named spawn_enemy.",
+  "success": false
+}
+```
+
+An actual disconnect requires the plugin-owned
+`EditorUndoRedoManager`; without it the tool reports an explicit
+unavailable error instead of mutating without undo support.
+
+---
+
+
+# Tool: create_script
+
+## Purpose
+
+Creates a NEW GDScript file in the project with the full content
+provided by the model. This is the agent's first code-producing
+tool.
+
+Contract decisions that differ deliberately from scene mutations:
+
+- File creation is NOT undoable through the editor's undo system;
+  the result reports `"undoable": false` and verifies the write by
+  reading the file back (`verified_write`).
+- The content is parse-checked BEFORE writing: content that does
+  not parse is never written to disk, so the agent cannot create
+  an unfixable broken script file.
+- Existing files are never overwritten (no script modification in
+  this tool set).
+- Missing parent directories are created.
+
+## Request
+
+```json
+{
+  "action": "create_script",
+  "reason": "The spawner needs its behavior script.",
+  "script_path": "res://scripts/enemy_spawner.gd",
+  "content": "extends Node2D\n\nfunc spawn_enemy() -> void:\n\t...\n"
+}
+```
+
+- `script_path`: `res://` path ending in `.gd` (prefix auto-added
+  if missing); no directory traversal, no backslashes.
+- `content`: the complete GDScript source; non-empty.
+
+## Validation (Godot side, in order)
+
+1. `script_path` present, non-empty string; normalized to
+   `res://`; must end in `.gd`; no `..`; no backslashes; non-empty
+   file name.
+2. `content` present, a non-empty string.
+3. The file must not already exist.
+4. Parse gate: a fresh `GDScript` parse of the content must
+   succeed.
+
+## Success response
+
+```json
+{
+  "action": "create_script",
+  "message": "Script created successfully in the project.",
+  "script_path": "res://scripts/enemy_spawner.gd",
+  "line_count": 7,
+  "parse_ok": true,
+  "changed": true,
+  "verified_write": true,
+  "success": true,
+  "undoable": false
+}
+```
+
+- `verified_write` is `true` only when the file read back from
+  disk equals the requested content.
+
+## Failure response
+
+```json
+{
+  "error": "create_script: content does not parse (Parse error). Nothing was written to disk.",
+  "success": false
+}
+```
+
+Other structured failures: `script already exists: ...`, missing
+`.gd` extension, directory traversal, backslash paths, empty
+content, unwritable directory.
+
+This tool needs no editor undo manager (it writes a file, not an
+undoable scene change).
+
+---
+
+
+# Tool: attach_script
+
+## Purpose
+
+Attaches an existing GDScript resource to an existing node in the
+currently edited scene as one undoable `EditorUndoRedoManager`
+property action ("AI Agent: Attach \<script\> to \<node\>"); the
+undo restores the previous attachment (including "no script").
+
+## Request
+
+```json
+{
+  "action": "attach_script",
+  "reason": "LeftArm should use the probe behavior.",
+  "node_path": "Player/LeftArm",
+  "script_path": "res://scripts/agent_probe.gd"
+}
+```
+
+## Validation (Godot side, in order)
+
+1. `node_path` and `script_path` present, non-empty strings
+   (script path normalized/validated like `create_script`).
+2. Node must exist; script file must exist.
+3. The resource must load and be a GDScript.
+4. Idempotent case: the SAME script already attached is a
+   deterministic no-op success (`changed: false`).
+5. Deterministic refusal: a DIFFERENT script already attached
+   fails with "Use detach_script first" - attaching is never
+   implicitly destructive.
+
+## Success response
+
+```json
+{
+  "action": "attach_script",
+  "message": "Script attached successfully in the Godot editor.",
+  "node_path": "Player/LeftArm",
+  "node_name": "LeftArm",
+  "script_path": "res://scripts/agent_probe.gd",
+  "was_attached": false,
+  "is_attached": true,
+  "changed": true,
+  "verified_attachment": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+- `is_attached` is read back from the node (`get_script()` +
+  `resource_path` comparison) after the change.
+
+## Failure response
+
+```json
+{
+  "error": "attach_script: node LeftArm already has a different script attached (res://scripts/agent_probe.gd). Use detach_script first.",
+  "success": false
+}
+```
+
+A headless process without the plugin-owned
+`EditorUndoRedoManager` receives an explicit unavailable error
+instead of mutating without undo support.
+
+---
+
+
+# Tool: detach_script
+
+## Purpose
+
+Removes the script attached to a node as one undoable
+`EditorUndoRedoManager` property action; the undo restores the
+previous script.
+
+## Request
+
+```json
+{
+  "action": "detach_script",
+  "reason": "This node should not carry behavior anymore.",
+  "node_path": "Player/LeftArm"
+}
+```
+
+## Idempotent semantics
+
+If the node has no script attached, the tool returns success with
+`"changed": false` and `"undoable": false`. Because nothing
+changes, this no-op also works in processes without the editor
+undo manager. Removing an existing attachment requires the
+undo manager and reports the explicit unavailable error without
+it.
+
+## Success response
+
+```json
+{
+  "action": "detach_script",
+  "message": "Script detached successfully in the Godot editor.",
+  "node_path": "Player/LeftArm",
+  "node_name": "LeftArm",
+  "detached_script": "res://scripts/agent_probe.gd",
+  "was_attached": true,
+  "is_attached": false,
+  "changed": true,
+  "verified_attachment": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+---
+
+
+# Tool: get_script_content
+
+## Purpose
+
+Reads the full source of a GDScript file from the project. The
+bridge reads the real file from disk; nothing is fabricated. To
+learn which script a node uses, inspect the node with
+`get_node_properties` or `find_nodes_by_script` first.
+
+## Request
+
+```json
+{
+  "action": "get_script_content",
+  "reason": "I need the current source before suggesting changes.",
+  "script_path": "res://scripts/agent_probe.gd"
+}
+```
+
+## Successful Result
+
+```json
+{
+  "action": "get_script_content",
+  "script_path": "res://scripts/agent_probe.gd",
+  "source": "extends Node\n\nvar probe_health := 10\n",
+  "line_count": 4,
+  "size_bytes": 45,
+  "success": true
+}
+```
+
+Read-only; works headless. Missing scripts return a structured
+`"script not found: ..."` failure.
+
+---
+
+
+# Tool: list_script_diagnostics
+
+## Purpose
+
+Parse-checks a GDScript file and reports the result. The bridge
+performs a fresh parse of the current file content; the Godot
+error code is the only programmatic parse signal available, so
+line-level diagnostics are never fabricated.
+
+Use it after `create_script` or before `attach_script` when the
+script's validity is uncertain.
+
+## Request
+
+```json
+{
+  "action": "list_script_diagnostics",
+  "reason": "Confirm the new script parses before attaching.",
+  "script_path": "res://scripts/agent_probe.gd"
+}
+```
+
+## Successful Result
+
+```json
+{
+  "action": "list_script_diagnostics",
+  "script_path": "res://scripts/agent_probe.gd",
+  "parse_ok": true,
+  "error": "",
+  "line_count": 4,
+  "size_bytes": 45,
+  "success": true
+}
+```
+
+For a script that fails to parse, `parse_ok` is `false` and
+`error` carries the Godot error string (e.g. `"Parse error"`).
+Read-only; works headless and in the live editor.
+
+---
+
+
 # Tool: reparent_node
 
 ## Purpose
@@ -2000,6 +2787,98 @@ Avoid tools that require the model to provide large speculative structures when 
 The protocol should support iterative reasoning.
 
 It should not require the model to perfectly understand the entire scene before performing its first operation.
+
+---
+
+# Mutation Result Contract (Python side)
+
+All seven scene mutations (`create_node`, `rename_node`,
+`delete_node`, `reparent_node`, `duplicate_node`,
+`set_properties`, `move_child`) are executed on the Godot side as editor-native,
+undoable `EditorUndoRedoManager` actions. The Python side adds a
+uniform contract layer over their results in `agent/mutation.py`:
+
+1. **Classification.** An action is a mutation if and only if the
+   action registry's `is_mutation` flag says so (`is_mutation_action()`).
+   The registry, `agent/boundary.py` mutation metadata, and the
+   classification layer are pinned to the same six-action set by
+   contract tests.
+2. **Result contract.** Every mutation tool result must be a dict
+   containing a boolean `success` key (`validate_mutation_result()`).
+   A contract violation is recorded as a failure, never as a
+   success.
+3. **Verification status.** Derived only from the bridge's own
+   `verified_*` result fields (`classify_verification()`):
+   - `failed` - the mutation reported failure, or any
+     `verified_*` claim was false,
+   - `verified` - success with at least one `verified_*` claim,
+     all true,
+   - `unverified` - success with no `verified_*` claims.
+   `name_collision_detected` is informational and is not a
+   verification claim. Verification status is never fabricated.
+4. **Execution records.** Each mutation execution produces a
+   frozen `MutationRecord` (action, mutation target from
+   `agent/boundary.py`, success, verification status, bridge-
+   reported `undoable`, error, turn/step, duration) and a
+   `MutationTelemetry` entry, recorded by `execute_single_action()`
+   on both standalone and batch paths, in addition to the existing
+   tool-action telemetry.
+
+Batch partial-failure semantics are unchanged: a batch stops at
+the first invalid or failed sub-action, remaining sub-actions are
+recorded as skipped, and skipped mutations remain blocked from
+automatic resume by `agent/boundary.py`.
+
+Undoability is a property of the Godot-side execution
+(`EditorUndoRedoManager`); the Python layer only carries the
+bridge's `undoable` reporting forward into records and telemetry.
+No separate Python-side undo mechanism exists or is planned.
+
+
+---
+
+---
+
+# Gemini Schema Compatibility for move_child
+
+## Background
+
+When `MoveChildAction` was added to the `AgentDecision` union, Gemini
+began rejecting the full schema request with `400 INVALID_ARGUMENT`. The
+confirmed root cause is that the provider cannot accept some
+provider-incompatible JSON-schema constraint keywords that Pydantic emits
+(`discriminator`, `minimum`, `maximum`, `minItems`, `maxItems`). The
+permanent, provider-only fix in `make_gemini_schema_compatible()` is to
+recursively convert `oneOf` to `anyOf` and remove `discriminator`,
+`minimum`, `maximum`, `minItems`, and `maxItems` from the transformed
+schema before it is sent to Gemini. Public Pydantic schemas and host-side
+validation are unchanged.
+
+`MoveChildAction` is kept in both the top-level `AgentDecision` union and
+the nested `batch.actions` union in the Gemini-generated schema. To make
+it structurally distinguishable, the Gemini adapter additionally injects
+a Gemini-only `result_mode` field (enum `["move_child"]`) into the
+transformed schema. This mirrors the existing `CountNodesAction` pattern
+and is a structural-uniqueness workaround, not the 400 fix. The public
+Pydantic schema is unchanged — `MoveChildAction` in
+`agent/schemas.py` has no `result_mode` field; the field is injected only
+in the Gemini-converted schema.
+
+## Current state
+
+- `MoveChildAction` is present in both the top-level union and the nested
+  batch union in Gemini's schema.
+- `AddToGroupAction` and `RemoveFromGroupAction` remain excluded from the
+  nested batch union only (intentional, for structural overlap reasons).
+- `result_mode: Literal["move_child"]` appears in Gemini's view of
+  `MoveChildAction` properties/required.
+
+## Viewed vs. sent
+
+The system prompt describes `move_child` as a tool the model may use. The
+Gemini response schema now includes `MoveChildAction` as a valid branch.
+Both views are consistent. No structural exclusion of `MoveChildAction`
+from Gemini's schema remains.
 
 ---
 

@@ -36,6 +36,10 @@ from agent.telemetry import (
 )
 
 from agent.registry import ACTION_REGISTRY
+from agent.mutation import (
+    build_mutation_record,
+    is_mutation_action,
+)
 
 
 # ==========================================
@@ -1035,18 +1039,47 @@ def execute_single_action(
         raise
 
     if observability is not None:
+        success = (
+            bool(result.get("success"))
+            if isinstance(result, dict)
+            else True
+        )
         observability.record_tool_action(
             turn_number=turn_number,
             step_number=step_number,
             action=decision.action,
-            success=(
-                bool(result.get("success"))
-                if isinstance(result, dict)
-                else True
-            ),
+            success=success,
             duration_ms=(time.monotonic() - started) * 1000,
             model_call_id=model_call_id,
         )
+
+        if is_mutation_action(decision.action):
+            mutation_record = build_mutation_record(
+                decision,
+                result,
+                turn_number=turn_number,
+                step_number=step_number,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+            observability.record_mutation(
+                mutation_record,
+                model_call_id=model_call_id,
+            )
+            if mutation_record.contract_violation:
+                logger.warning(
+                    "Mutation contract violation for %s: %s",
+                    decision.action,
+                    mutation_record.contract_violation,
+                )
+            else:
+                logger.info(
+                    "Mutation recorded: action=%s success=%s "
+                    "verification=%s undoable=%s",
+                    mutation_record.action,
+                    mutation_record.success,
+                    mutation_record.verification,
+                    mutation_record.undoable,
+                )
     return result
 
 
@@ -1779,7 +1812,156 @@ node_path
 new_parent_path
 new_name
 
-11. validate_node_type
+11. move_child
+
+Moves an existing child within its parent to a
+requested sibling index. Use get_scene_tree or
+find_nodes first to learn the current child
+order; the result reports the verified sibling
+order after the move.
+
+Required parameters:
+
+node_path
+new_index
+
+12. add_to_group
+
+Adds an existing node to a persistent group.
+The result verifies the resulting membership.
+Adding a node that is already in the group is
+a deterministic no-op success.
+
+Required parameters:
+
+node_path
+group_name
+
+13. remove_from_group
+
+Removes an existing node from a persistent
+group. The result verifies the resulting
+membership. Removing a node that is not in
+the group is a deterministic no-op success.
+
+Required parameters:
+
+node_path
+group_name
+
+14. list_node_connections
+
+Use to inspect the live signal connections of one
+node, in both directions. The result separates
+incoming and outgoing connections and reports the
+peer node, signal name, method name, and connection
+flags. Use this when wiring or auditing signal
+connections; use list_node_signals for the signal
+definitions themselves.
+
+Required parameter:
+
+node_path
+
+15. connect_signal
+
+Connects a signal on one existing node to a method
+on another existing node. The bridge verifies that
+the signal exists on the emitter and the method
+exists on the target. Connecting an already
+connected pair is a deterministic no-op success.
+The result verifies the resulting connection.
+Callable expressions are not supported: address the
+target exactly as node path plus method name.
+
+Required parameters:
+
+node_path
+signal_name
+target_path
+method_name
+
+Optional parameter:
+
+deferred (default false; when true the connection
+is made deferred)
+
+16. disconnect_signal
+
+Removes an existing signal connection between two
+nodes. Disconnecting a pair that is not connected
+is a deterministic no-op success. The result
+verifies the resulting disconnection.
+
+Required parameters:
+
+node_path
+signal_name
+target_path
+method_name
+
+17. create_script
+
+Creates a NEW GDScript file in the project with the full
+content you provide. The bridge parse-checks the content
+BEFORE writing: content that does not parse is never
+written to disk. Existing files are never overwritten.
+File creation is NOT undoable; the result verifies the
+write by reading the file back.
+
+Required parameters:
+
+script_path (res:// path ending in .gd)
+content (the complete GDScript source)
+
+18. attach_script
+
+Attaches an existing GDScript resource to an existing
+node. Attaching a script the node already has is a
+deterministic no-op success. If the node has a different
+script attached, the request is refused; use
+detach_script first. The result verifies the resulting
+attachment.
+
+Required parameters:
+
+node_path
+script_path
+
+19. detach_script
+
+Removes the script attached to an existing node.
+Detaching a node without a script is a deterministic
+no-op success. The undo restores the previous script.
+The result verifies the resulting state.
+
+Required parameter:
+
+node_path
+
+20. get_script_content
+
+Use to read the full source of a GDScript file from the
+project. To learn which script a node uses, inspect the
+node with get_node_properties or find_nodes_by_script
+first.
+
+Required parameter:
+
+script_path
+
+21. list_script_diagnostics
+
+Use to parse-check a GDScript file and read the result.
+Use it after create_script or before attach_script when
+you are unsure about the script's validity. It reports
+parse_ok and the Godot error code when parsing fails.
+
+Required parameter:
+
+script_path
+
+22. validate_node_type
 
 Use before create_node whenever you are not
 completely certain that a Godot class name is
@@ -1799,7 +1981,7 @@ Resource) or cannot be instantiated directly
 (for example CanvasItem) is reported as not
 valid for node creation.
 
-12. list_available_node_types
+23. list_available_node_types
 
 Use to discover native, instantiable Godot Node
 types before validating an exact candidate or
@@ -1817,7 +1999,7 @@ total_matches and truncated before assuming the
 list is exhaustive. Use validate_node_type on a
 chosen exact name before create_node when needed.
 
-13. get_node_class_info
+24. get_node_class_info
 
 Use to inspect one registered Godot class. The
 result includes its direct base class and whether
@@ -1828,7 +2010,7 @@ Required parameter:
 
 class_name
 
-14. list_node_signals
+25. list_node_signals
 
 Use to inspect the signals exposed by one node.
 The result includes built-in and inherited signal
@@ -1838,7 +2020,7 @@ Required parameter:
 
 node_path
 
-15. list_node_groups
+26. list_node_groups
 
 Use to inspect the groups that one node currently
 belongs to. Group membership is instance state and
@@ -1848,7 +2030,7 @@ Required parameter:
 
 node_path
 
-16. count_nodes
+27. count_nodes
 
 Use when only the number of matching nodes is
 needed. It shares find_nodes filters and returns
@@ -1861,7 +2043,7 @@ node_type
 parent_path
 name_match
 
-17. find_nodes_by_script
+28. find_nodes_by_script
 
 Use to find nodes with an exact attached script
 resource path. A missing res:// prefix is normalized.
@@ -1870,7 +2052,7 @@ Required parameter:
 
 script_path
 
-18. find_nodes_by_group
+29. find_nodes_by_group
 
 Use to find nodes with exact, case-sensitive live
 membership in one group. Zero matches is a success.
@@ -1879,7 +2061,7 @@ Required parameter:
 
 group_name
 
-19. get_project_settings
+30. get_project_settings
 
 Use to inspect project configuration from live
 ProjectSettings. Provide exact setting names and/or
@@ -1892,37 +2074,37 @@ setting_names
 prefix
 limit
 
-20. list_autoloads
+31. list_autoloads
 
 Use to list configured project autoload names and
 resource targets. It reads live ProjectSettings,
 returns deterministic ordering, and is read-only.
 
-21. get_editor_state
+32. get_editor_state
 
 Use to inspect bounded current editor state,
 including the edited scene, open scenes, selected
 nodes, and playing-scene state. It requires the
 running editor plugin and does not scrape UI text.
 
-22. list_scenes_in_project
+33. list_scenes_in_project
 
 Use to list scene resources known to the running
 editor filesystem. Results are sorted and the tool
 reports an explicit not-ready error while scanning
 or importing.
 
-23. get_undo_history_summary
+34. get_undo_history_summary
 
 Use to inspect whether editor undo or redo is
 available and to read stable action labels. It is
 read-only; never use it to perform undo or redo.
 
-24. describe_current_scene
+35. describe_current_scene
 
 Use only when visual information is necessary.
 
-25. final_answer
+36. final_answer
 
 Use only when the informational request has been
 answered or every requested operation has been
@@ -1935,7 +2117,7 @@ Required parameter:
 
 final_answer
 
-26. exit_session
+37. exit_session
 
 Use only when the entire persistent session is
 explicitly complete or genuinely unrecoverable.
@@ -1975,7 +2157,7 @@ exit_summary
 exit_summary must briefly explain why the session is
 being terminated.
 
-27. batch
+38. batch
 
 Use only when you are already confident about a
 short, strictly sequential series of KNOWN,

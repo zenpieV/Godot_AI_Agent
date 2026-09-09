@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-This document records the provider contract implemented by the current source as of 2026-09-05. Gemini is the primary provider and Groq is the active parity target. OpenRouter and Ollama implement compatible entry points but are not active parity targets for this phase.
+This document records the provider contract implemented by the current source as of 2026-09-05. Gemini is the primary provider and Groq is the active parity target. OpenRouter, Ollama, and Z.ai implement compatible entry points (five adapters total) but are not active parity targets for this phase.
 
 The contract is the behavior required at the boundary of `agent/godot_agent.py`; it is not a redesign proposal.
 
@@ -39,7 +39,7 @@ with `available=False`; values are never estimated or fabricated.
 The agent records this usage in model-call telemetry, and failed
 calls are recorded with a duration and a `safe_error_message()` that
 truncates the text to 200 characters and redacts `GEMINI_API_KEY`,
-`GROQ_API_KEY`, and `OPENROUTER_API_KEY` values.
+`GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `ZAI_API_KEY` values.
 
 The provider does not execute tools, validate Godot paths, enforce batch boundaries, compact context, or perform final-answer handling. Those responsibilities remain in Python orchestration and the Godot bridge.
 
@@ -78,7 +78,7 @@ The agent applies the same provider-independent pipeline:
 - accepts `conversation` and the generated schema;
 - concatenates all system messages into `system_instruction`;
 - flattens user, assistant, and tool messages into one text prompt using `USER:`, `ASSISTANT:`, and `TOOL RESULT:` labels;
-- converts Pydantic `oneOf` to `anyOf` recursively and removes `discriminator`, because the Gemini response-schema surface does not accept those keywords;
+- converts Pydantic `oneOf` to `anyOf` recursively and removes the provider-incompatible constraint keywords `discriminator`, `minimum`, `maximum`, `minItems`, and `maxItems`, because the Gemini response-schema surface does not accept them;
 - requests `application/json` with the converted `response_schema` through `client.models.generate_content`;
 - retries only `google.genai.errors.ServerError` up to three total attempts, with 1 and 2 second backoffs;
 - does not retry missing-key, client/request, schema, empty-response, or other non-server errors;

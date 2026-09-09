@@ -13,6 +13,8 @@ The currently relevant providers are:
 - Gemini.
 - Groq.
 - Ollama.
+- OpenRouter.
+- Z.ai.
 
 Future providers may be added when they provide a practical benefit.
 

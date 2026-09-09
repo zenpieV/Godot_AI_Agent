@@ -33,7 +33,7 @@ The immediate architectural direction is:
 1. Stabilize tool semantics. (largely done: bounded batches, two-tier batch boundary)
 2. Reduce unnecessary model retries.
 3. Improve deterministic validation and constraint handling.
-4. Establish a clean provider abstraction. (done: four provider adapters plus provider contract tests)
+4. Establish a clean provider abstraction. (done: five provider adapters — Gemini, Groq, Ollama, OpenRouter, Z.ai — plus provider contract tests)
 5. Add Groq alongside Gemini and Ollama. (adapter implemented; live end-to-end validation still pending)
 6. Continue expanding Godot editor operations incrementally.
 
@@ -72,8 +72,96 @@ state, filesystem, and undo-manager unavailability instead of fabricating
 values. Full editor-backed smoke validation requires an editor process with
 the plugin bridge available.
 
-Mutation tools remain the next architectural milestone. Screenshot support
+Mutation tools are no longer a future milestone: the mutation
+architecture landed with `create_node` … `remove_from_group` and is
+now extended by the signal-connection tools below. Screenshot support
 also remains deferred.
+
+---
+
+# Signal Connection Tools Milestone (2026-09-09)
+
+Three tools covering live signal-connection state were implemented
+end-to-end, following the add/remove-from-group pattern exactly:
+
+* `list_node_connections` (read-only) — live incoming/outgoing
+  connections of one node from real reflection
+  (`get_incoming_connections`, `get_signal_connection_list`), with
+  deterministic sorting and per-connection flags (`deferred`,
+  `persistent`, `one_shot`). Editor-internal connections whose peer
+  lies outside the edited scene (e.g. `SceneTreeEditor` hooks) are
+  omitted from the entries and reported as
+  `internal_connections_omitted`, preserving the scene-relative path
+  contract without silently hiding data.
+* `connect_signal` (mutation) — emitter node + signal -> receiver
+  node + method, addressed exactly like the editor's Connect dialog;
+  callable expressions and bound args deliberately unsupported.
+  Validates `has_signal`/`has_method` before connecting; idempotent
+  no-op when already connected; persistent (optionally deferred)
+  single undoable `EditorUndoRedoManager` action; `verified_connection`
+  read-back.
+* `disconnect_signal` (mutation) — inverse operation; the undo
+  restores the original connection flags; idempotent no-op when not
+  connected (works even without the undo manager, since no change is
+  made); `verified_connection` read-back.
+
+Rule 12 handling: `ConnectSignalAction`/`DisconnectSignalAction` are
+a structurally identical pair and are excluded from the Gemini
+provider-only nested batch union (same precedent as
+`AddToGroupAction`/`RemoveFromGroupAction`); both remain valid
+top-level actions. `ListConnectionsAction` needed no exclusion.
+
+Verified by: 258-passing Python suite (16 new/extended tests), the
+`connect_disconnect_signal_harness.gd` headless harness, a 14-case
+live bridge validation against a headless editor with the plugin
+(isolated instance; the user's editor keeps the previously loaded
+plugin build), and a live Gemini schema smoke test on
+`gemini-3.1-flash-lite` (three scenarios, zero 400s). See
+`docs/TEST_HISTORY.md`.
+
+---
+
+# Script Tools Milestone Phase A (2026-09-09)
+
+Five tools covering script creation, attachment, and inspection —
+the agent's entry point into code-producing tasks:
+
+* `create_script` (mutation) — writes a new `.gd` file with full
+  content. **The agent's first non-undoable real mutation**
+  (`undoable: false`), verified by read-back (`verified_write`).
+  Parse-gated BEFORE writing (fresh `GDScript` parse): unparseable
+  content is never written, so the agent cannot create an
+  unfixable broken file. Existing files are never overwritten;
+  missing parent directories are created.
+* `attach_script` (mutation) — node-scoped, undoable
+  `EditorUndoRedoManager` property action; idempotent when the
+  same script is attached; deterministic refusal when a different
+  script is attached ("detach first"); `verified_attachment`
+  read-back.
+* `detach_script` (mutation) — undo restores the previous script;
+  idempotent no-op works without the undo manager;
+  `verified_attachment` read-back.
+* `get_script_content` (read) — full source of a script file from
+  disk.
+* `list_script_diagnostics` (read) — fresh parse-check reporting
+  `parse_ok` plus the Godot error string; works headless (an
+  improvement over the originally planned live-editor-only
+  diagnostics).
+
+Godot side lives in a new `ai_agent_script_tools.gd`
+(`AIAgentScriptTools`), wired through the router as a fourth tool
+domain; the plugin instantiates and injects it. Rule 12: no
+Gemini nested-batch exclusions were needed — the structural
+analysis (identical required sets only against tolerated
+precedents: `delete_node`/{node_path}, `find_nodes_by_script`/
+{script_path}) was confirmed by the live smoke test.
+
+Verified by: 280-passing Python suite (+22 tests), the
+self-cleaning `script_tools_harness.gd` headless harness, an
+18-case live bridge validation (isolated instance), and a live
+Gemini smoke test including a realistic multi-line GDScript
+content round-trip (the batch's new failure surface). See
+`docs/TEST_HISTORY.md`.
 
 ---
 
@@ -180,6 +268,14 @@ resumption of the skipped action.
 | `delete_node` | `node_path` |
 | `reparent_node` | `node_path`, `new_parent_path` |
 | `set_properties` | `node_path`, `properties_json` |
+| `move_child` | `node_path`, `new_index` |
+| `add_to_group` | `node_path`, `group_name` |
+| `remove_from_group` | `node_path`, `group_name` |
+| `connect_signal` | `node_path`, `signal_name`, `target_path`, `method_name`, `deferred` |
+| `disconnect_signal` | `node_path`, `signal_name`, `target_path`, `method_name` |
+| `create_script` | `script_path`, `content` |
+| `attach_script` | `node_path`, `script_path` |
+| `detach_script` | `node_path` |
 
 **Tier 2 — Mutation Target Match (bypass prevention):**
 Compares the action type and the identity of the resource being mutated.
@@ -195,6 +291,14 @@ still targeting the same skipped resource.
 | `delete_node` | `node_path` | The node being deleted |
 | `reparent_node` | `node_path` | The node being reparented |
 | `set_properties` | `node_path` | The node being modified |
+| `move_child` | `node_path` | The child being reordered |
+| `add_to_group` | `node_path` | The node whose membership changes |
+| `remove_from_group` | `node_path` | The node whose membership changes |
+| `connect_signal` | `node_path`, `signal_name`, `target_path`, `method_name` | The full connection identity; `deferred` is result state, so toggling it cannot bypass |
+| `disconnect_signal` | `node_path`, `signal_name`, `target_path`, `method_name` | The full connection identity |
+| `create_script` | `script_path` | The script file being created (project-level resource) |
+| `attach_script` | `node_path` | The node's script attachment (script change cannot bypass) |
+| `detach_script` | `node_path` | The node's script attachment |
 
 **Discovered bypass:** The initial exact-fingerprint-only enforcement was
 evaded when the model changed `new_name` from `"ShouldBeSkipped"` to
@@ -1418,3 +1522,268 @@ The detailed history belongs in `TEST_HISTORY.md`.
 # GIT INITIALIZED
 
 Git version control initialized on 2026-09-06.
+
+# Mutation Architecture (2026-09-08)
+
+A minimal mutation architecture was added on the Python side. The
+Godot side already executes all scene mutations
+(create_node, rename_node, delete_node, reparent_node,
+duplicate_node, set_properties, move_child) as editor-native,
+undoable
+`EditorUndoRedoManager` actions and reports `undoable` and
+`verified_*` fields in its results; no Godot-side changes were
+needed at the time. `move_child` was added later (see below).
+
+# move_child Tool (2026-09-08)
+
+The first real mutation tool built on top of the mutation
+architecture, implemented end to end:
+
+* Schema: `MoveChildAction` (`action`, `node_path`, `new_index`
+  with `ge=0`), registered in `BatchableAction` and
+  `AgentDecision`; registry entry with `required_fields=
+  ("node_path",)` and `is_mutation=True`.
+* Boundary: `move_child` uses fingerprint fields
+  (`node_path`, `new_index`) and target field (`node_path`), so
+  a skipped move blocks any automatic resume targeting the same
+  node regardless of the requested index.
+* Godot side (`move_child_from_request` in
+  `ai_agent_node_tools.gd`, routed at `POST /move_child`):
+  validates field presence/types, node existence, parent
+  existence, and index range; handles already-at-index requests
+  deterministically as a success with `moved: false` and no undo
+  history; performs the move as one undoable
+  `EditorUndoRedoManager` action; reads the real resulting index
+  and sibling order back and reports `verified_index` /
+  `verified_order`; reports explicit unavailable errors where the
+  editor undo manager is absent (headless).
+* Python side: `scene_tools.move_child()` posts to
+  `/move_child`; results flow through the existing mutation
+  contract (`verified_index`/`verified_order` are `verified_*`
+  claims) and mutation telemetry on both standalone and batch
+  paths.
+
+# add_to_group / remove_from_group Tools (2026-09-08)
+
+Group membership mutations built on the same mutation architecture:
+
+* Schemas: `AddToGroupAction` and `RemoveFromGroupAction` (`action`,
+  `node_path`, `group_name`), registered in `BatchableAction` and
+  `AgentDecision`; registry entries with `required_fields=("node_path",
+  "group_name")` and `is_mutation=True`.
+* Boundary: both use fingerprint fields (`node_path`, `group_name`)
+  and target field (`node_path`), so a skipped group mutation blocks
+  any automatic resume targeting the same node regardless of the
+  group name.
+* Godot side (`add_to_group_from_request` /
+  `remove_from_group_from_request` in `ai_agent_node_tools.gd`,
+  routed at `POST /add_to_group` and `POST /remove_from_group`):
+  validates field presence/types, node existence, and non-empty group
+  name; handles idempotent cases (already a member / not a member)
+  deterministically as successes with `changed: false` and no undo
+  history; performs the change as one undoable
+  `EditorUndoRedoManager` action; reads the real resulting membership
+  back via `is_in_group` and reports `verified_membership`; reports
+  explicit unavailable errors where the editor undo manager is absent
+  (headless).
+* Python side: `scene_tools.add_to_group()` /
+  `scene_tools.remove_from_group()` post to the new endpoints;
+  results flow through the existing mutation contract
+  (`verified_membership` is a `verified_*` claim) and mutation
+  telemetry on both standalone and batch paths.
+* Verified live against a running editor bridge: add, idempotent
+  add, remove, idempotent remove, missing node, and empty group name
+  all returned the documented structured results.
+
+
+* Verified live against a running editor bridge: real move,
+  no-op, out-of-range index, and missing node all returned the
+  documented structured results.
+
+
+Python-side additions:
+
+* `agent/mutation.py` - the single mutation contract layer:
+  - `is_mutation_action()` classifies actions using the
+    registry's authoritative `is_mutation` flag.
+  - `validate_mutation_result()` enforces the structured result
+    contract: a mutation result must be a dict with a boolean
+    `success` key. Contract violations are recorded as failures,
+    never as successes.
+  - `classify_verification()` derives a verification status from
+    the bridge's own `verified_*` claims: `verified` (success and
+    all claims true), `unverified` (success, no claims), or
+    `failed` (failure, or any claim false). Status is never
+    fabricated.
+  - `build_mutation_record()` produces a frozen `MutationRecord`
+    per mutation execution carrying action, mutation target
+    (from `agent/boundary.py`), success, verification status,
+    editor-reported undoability, and error details.
+* `agent/telemetry.py` - `MutationTelemetry` records plus
+  `SessionObservability.record_mutation()` and mutation counts
+  (`mutation_count`, `successful_mutation_count`,
+  `failed_mutation_count`, `unverified_mutation_count`) in
+  `SessionSummary`.
+* `agent/godot_agent.py` - `execute_single_action()` now builds
+  and records a `MutationRecord` for every mutation action, on
+  both the standalone and batch paths, in addition to (not instead
+  of) the existing `ToolActionTelemetry`. Tool results and tool
+  behavior are unchanged.
+
+Batch semantics, interrupted-batch blocking, batch limits, session
+control, and all existing undo behavior are untouched. No new
+mutation tools were added.
+
+Current limitation: Python-side verification status reflects only
+what the Godot bridge reports at mutation time; a "verified"
+status is not a persistent guarantee of scene state.
+
+---
+
+# Gemini structured-output 400 regression: confirmed root cause (2026-09-09)
+
+The two sections below titled "Gemini Schema Compatibility Fix for move_child" are a
+historical record of the initial (superseded) hypothesis. They describe a `result_mode`
+enum-injection workaround and an earlier live probe at
+`gemini-2.5-flash-preview-09-2025` that are NOT the current explanation for the 400 and
+are NOT the current fix.
+
+Confirmed diagnosis (authoritative — matches the current implementation):
+
+- The Gemini `400 INVALID_ARGUMENT` on the full `AgentDecision` schema was caused by
+  provider-incompatible JSON-schema constraint keywords that Pydantic emits:
+  `discriminator`, `minimum`, `maximum`, `minItems`, `maxItems`.
+- `make_gemini_schema_compatible()` (in `models/gemini_provider.py`) is the permanent,
+  provider-only fix. It normalizes the schema by recursively:
+  - converting `oneOf` to `anyOf`,
+  - removing `discriminator`,
+  - removing `minimum`, `maximum`, `minItems`, and `maxItems`.
+  Host-side Pydantic validation is unchanged and remains authoritative.
+- The `result_mode` enum injection for `CountNodesAction` / `MoveChildAction` is a
+  separate, still-present structural-uniqueness workaround. It is NOT the 400 fix.
+- Current default model: `gemini-3.1-flash-lite` (`config/settings.py::GEMINI_MODEL`).
+- The temporary probe `tmp_gemini_regression_probe.py` was removed after investigation.
+- Regression coverage: the six permanent tests in `tests/test_gemini_provider.py`
+  assert the recursive removal of `discriminator`, `minimum`, `maximum`, `minItems`,
+  `maxItems`, including on the real `AgentDecision` schema.
+- Provider suite (`tests/test_gemini_provider.py`, `tests/test_provider_adapters.py`,
+  `tests/test_provider_contract.py`): 121 passing tests. Full Python suite: 242 passing.
+- Live end-to-end validation with `gemini-3.1-flash-lite` passed all five scenarios
+  (greeting, scene-tree inspection, `move_child`, a bounded batch, and a constrained
+  `list_available_node_types`) with zero `400`s.
+
+---
+
+# Gemini Schema Compatibility Fix for move_child (2026-09-09)
+
+## Problem
+
+When `MoveChildAction` was added to the `AgentDecision` union in
+`agent/schemas.py`, Gemini began rejecting the full schema request with
+`400 INVALID_ARGUMENT`. The initial diagnosis by a prior agent concluded
+the problem was structural overlap and added `MoveChildAction` to both
+`GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS` and `GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS`
+in `models/gemini_provider.py`. That removal was the wrong fix: it stripped
+`MoveChildAction` entirely from Gemini's generated schema, so the system
+prompt could still describe `move_child` as a tool while Gemini's
+structured-output schema made it impossible for the model to select. The
+practical symptom was that the agent repeatedly chose `set_properties` or
+`rename_node` even when its own reasoning identified `move_child` as the
+correct action.
+
+## Investigation
+
+Live A/B isolation was decisive: removing `MoveChildAction` from the Gemini
+schema restored request acceptance, while removing the structurally-
+overlapping group actions did not. Unlike `AddToGroupAction` /
+`RemoveFromGroupAction`, which overlap each other, `MoveChildAction` was
+the single action causing Gemini's union validator to reject the schema —
+mirroring the earlier `CountNodesAction` failure pattern.
+
+## Fix
+
+Followed the proven `CountNodesAction` path: add a Gemini-only `result_mode`
+enum injection in `make_gemini_schema_compatible()` so `MoveChildAction`
+becomes structurally unique in the union, and remove it from both exclusion
+sets so it flows into the top-level and nested-batch schemas. The public
+Pydantic schema was intentionally left untouched (no `result_mode` field on
+`MoveChildAction`); the Gemini transform injects `result_mode:
+Literal["move_child"]` only in the converted schema Gemini sees. This keeps
+`MoveChildAction` valid for Pydantic round-trip while making it
+distinguishable from other union branches for Gemini.
+
+## Result
+
+- `MoveChildAction` is now present in both the top-level `AgentDecision`
+  union and the nested `batch.actions` union in the Gemini-generated schema.
+- `AddToGroupAction` and `RemoveFromGroupAction` remain excluded from the
+  nested batch union only (unchanged); they are still valid standalone
+  actions and in the public Pydantic schema.
+- `result_mode` appears in Gemini's view of `MoveChildAction`
+  properties/required, matching the `CountNodesAction` pattern.
+- No Godot code, mutation execution, registry semantics, batch behavior, or
+  other providers were changed.
+- All 8 provider adapter tests pass; full suite 236 passed.
+
+## Live validation
+
+A live Gemini schema probe was performed via the temporary
+`tmp_gemini_regression_probe.py` script using the live Gemini API
+(`models/gemini-2.5-flash-preview-09-2025`). Before the fix, a raw
+`AgentDecision` schema produced `400 INVALID_ARGUMENT`. After the fix,
+the same schema with the `result_mode` injection and exclusions removed
+was accepted (`200 OK`). This confirms the fix resolves the structural
+Gemini incompatibility without changing public schemas or tool semantics.
+
+The probe was removed after validation. No `GEMINI_API_KEY` is committed
+to the repo.
+
+---
+
+# Gemini Schema Compatibility Fix: move_child (2026-09-09)
+
+## Problem
+
+When `MoveChildAction` was added to the `AgentDecision` union, Gemini started rejecting
+the full schema request with `400 INVALID_ARGUMENT`. The initial diagnosis by a prior
+agent concluded the problem was structural overlap and added `MoveChildAction` to both
+`GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS` and `GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS` in
+`models/gemini_provider.py`. That removal was the wrong fix: it stripped
+`MoveChildAction` entirely from Gemini's generated schema, so the system prompt could
+still describe `move_child` as a tool while Gemini's structured-output schema made it
+impossible for the model to select. The practical symptom was that the agent repeatedly
+chose `set_properties` or `rename_node` even when its own reasoning identified
+`move_child` as the correct action.
+
+## Investigation
+
+Live A/B isolation was decisive: removing `MoveChildAction` from the Gemini schema
+restored request acceptance, while removing the structurally-overlapping group actions
+did not. Unlike `AddToGroupAction`/`RemoveFromGroupAction`, which overlap each other,
+`MoveChildAction` was the single action causing Gemini's union validator to reject the
+schema — mirroring the earlier `CountNodesAction` failure pattern.
+
+## Fix
+
+Followed the proven `CountNodesAction` path: add a Gemini-only `result_mode` enum
+injection in `make_gemini_schema_compatible()` so `MoveChildAction` becomes structurally
+unique in the union, and remove it from both exclusion sets so it flows into the
+top-level and nested-batch schemas. The public Pydantic schema was intentionally left
+untouched (no `result_mode` field on `MoveChildAction`); the Gemini transform injects
+`result_mode: Literal["move_child"]` only in the converted schema Gemini sees. This
+keeps `MoveChildAction` valid for Pydantic round-trip while making it distinguishable
+from other union branches for Gemini.
+
+## Result
+
+- `MoveChildAction` is now present in both the top-level `AgentDecision` union and the
+  nested `batch.actions` union in the Gemini-generated schema.
+- `AddToGroupAction` and `RemoveFromGroupAction` remain excluded from the nested
+  batch union only (unchanged); they are still valid standalone actions and in the
+  public Pyddc schema.
+- `result_mode` appears in Gemini's view of `MoveChildAction` properties/required,
+  matching the `CountNodesAction` pattern.
+- No Godot code, mutation execution, registry semantics, batch behavior, or other
+  providers were changed.
+- All 8 provider adapter tests pass; full suite 236 passed.
+

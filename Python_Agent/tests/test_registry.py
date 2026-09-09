@@ -16,6 +16,7 @@ Guarantees:
 
 import builtins
 import json
+import logging
 from types import SimpleNamespace
 from typing import get_args
 from unittest.mock import Mock
@@ -49,6 +50,17 @@ from agent.schemas import (
     RenameNodeAction,
     ReparentNodeAction,
     SetPropertiesAction,
+    MoveChildAction,
+    AddToGroupAction,
+    RemoveFromGroupAction,
+    ListConnectionsAction,
+    ConnectSignalAction,
+    DisconnectSignalAction,
+    CreateScriptAction,
+    AttachScriptAction,
+    DetachScriptAction,
+    GetScriptContentAction,
+    ListScriptDiagnosticsAction,
     ValidateNodeTypeAction,
 )
 from tools import scene_tools
@@ -84,6 +96,17 @@ EXECUTABLE_ACTIONS = {
     "reparent_node",
     "duplicate_node",
     "set_properties",
+    "move_child",
+    "add_to_group",
+    "remove_from_group",
+    "list_node_connections",
+    "connect_signal",
+    "disconnect_signal",
+    "create_script",
+    "attach_script",
+    "detach_script",
+    "get_script_content",
+    "list_script_diagnostics",
 }
 
 MUTATION_ACTIONS = {
@@ -93,6 +116,14 @@ MUTATION_ACTIONS = {
     "reparent_node",
     "duplicate_node",
     "set_properties",
+    "move_child",
+    "add_to_group",
+    "remove_from_group",
+    "connect_signal",
+    "disconnect_signal",
+    "create_script",
+    "attach_script",
+    "detach_script",
 }
 
 # The exact required-field mapping previously maintained by hand
@@ -119,6 +150,27 @@ PREVIOUS_ACTION_REQUIREMENTS = {
     "reparent_node": ("node_path", "new_parent_path"),
     "duplicate_node": ("node_path", "new_parent_path", "new_name"),
     "set_properties": ("node_path", "properties_json"),
+    "move_child": ("node_path",),
+    "add_to_group": ("node_path", "group_name"),
+    "remove_from_group": ("node_path", "group_name"),
+    "list_node_connections": ("node_path",),
+    "connect_signal": (
+        "node_path",
+        "signal_name",
+        "target_path",
+        "method_name",
+    ),
+    "disconnect_signal": (
+        "node_path",
+        "signal_name",
+        "target_path",
+        "method_name",
+    ),
+    "create_script": ("script_path", "content"),
+    "attach_script": ("node_path", "script_path"),
+    "detach_script": ("node_path",),
+    "get_script_content": ("script_path",),
+    "list_script_diagnostics": ("script_path",),
     "describe_current_scene": (),
     "batch": ("actions",),
     "final_answer": ("final_answer",),
@@ -346,6 +398,39 @@ def test_list_node_groups_is_read_only_and_not_in_boundary():
     assert spec.is_mutation is False
     assert "list_node_groups" not in boundary._MUTATION_TARGET_KEYS
     assert "list_node_groups" not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_list_node_connections_is_read_only_and_not_in_boundary():
+    """list_node_connections is a read-only inspection action."""
+    spec = ACTION_REGISTRY["list_node_connections"]
+    assert spec.is_mutation is False
+    assert "list_node_connections" not in boundary._MUTATION_TARGET_KEYS
+    assert (
+        "list_node_connections"
+        not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+    )
+
+
+def test_get_script_content_is_read_only_and_not_in_boundary():
+    """get_script_content is a read-only inspection action."""
+    spec = ACTION_REGISTRY["get_script_content"]
+    assert spec.is_mutation is False
+    assert "get_script_content" not in boundary._MUTATION_TARGET_KEYS
+    assert (
+        "get_script_content"
+        not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+    )
+
+
+def test_list_script_diagnostics_is_read_only_and_not_in_boundary():
+    """list_script_diagnostics is a read-only inspection action."""
+    spec = ACTION_REGISTRY["list_script_diagnostics"]
+    assert spec.is_mutation is False
+    assert "list_script_diagnostics" not in boundary._MUTATION_TARGET_KEYS
+    assert (
+        "list_script_diagnostics"
+        not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+    )
 
 
 def test_count_nodes_is_read_only_and_not_in_boundary():
@@ -678,6 +763,17 @@ DISPATCH_CASES = [
         {"node_path": "Player", "properties": {"visible": True}},
     ),
     (
+        "move_child",
+        MoveChildAction(
+            reason="r",
+            action="move_child",
+            node_path="Player",
+            new_index=2,
+        ),
+        "move_child",
+        {"node_path": "Player", "new_index": 2},
+    ),
+    (
         "validate_node_type",
         ValidateNodeTypeAction(
             reason="r",
@@ -706,6 +802,131 @@ DISPATCH_CASES = [
         ),
         "list_node_groups",
         {"node_path": "Player"},
+    ),
+    (
+        "list_node_connections",
+        ListConnectionsAction(
+            reason="r",
+            action="list_node_connections",
+            node_path="Player",
+        ),
+        "list_node_connections",
+        {"node_path": "Player"},
+    ),
+    (
+        "connect_signal-defaults",
+        ConnectSignalAction(
+            reason="r",
+            action="connect_signal",
+            node_path="Player",
+            signal_name="pressed",
+            target_path="Enemy",
+            method_name="on_pressed",
+        ),
+        "connect_signal",
+        {
+            "node_path": "Player",
+            "signal_name": "pressed",
+            "target_path": "Enemy",
+            "method_name": "on_pressed",
+            "deferred": False,
+        },
+    ),
+    (
+        "connect_signal-deferred",
+        ConnectSignalAction(
+            reason="r",
+            action="connect_signal",
+            node_path="Player",
+            signal_name="tree_entered",
+            target_path=".",
+            method_name="queue_free",
+            deferred=True,
+        ),
+        "connect_signal",
+        {
+            "node_path": "Player",
+            "signal_name": "tree_entered",
+            "target_path": ".",
+            "method_name": "queue_free",
+            "deferred": True,
+        },
+    ),
+    (
+        "disconnect_signal",
+        DisconnectSignalAction(
+            reason="r",
+            action="disconnect_signal",
+            node_path="Player",
+            signal_name="pressed",
+            target_path="Enemy",
+            method_name="on_pressed",
+        ),
+        "disconnect_signal",
+        {
+            "node_path": "Player",
+            "signal_name": "pressed",
+            "target_path": "Enemy",
+            "method_name": "on_pressed",
+        },
+    ),
+    (
+        "create_script",
+        CreateScriptAction(
+            reason="r",
+            action="create_script",
+            script_path="res://scripts/probe.gd",
+            content="extends Node\n",
+        ),
+        "create_script",
+        {
+            "script_path": "res://scripts/probe.gd",
+            "content": "extends Node\n",
+        },
+    ),
+    (
+        "attach_script",
+        AttachScriptAction(
+            reason="r",
+            action="attach_script",
+            node_path="Player",
+            script_path="res://scripts/probe.gd",
+        ),
+        "attach_script",
+        {
+            "node_path": "Player",
+            "script_path": "res://scripts/probe.gd",
+        },
+    ),
+    (
+        "detach_script",
+        DetachScriptAction(
+            reason="r",
+            action="detach_script",
+            node_path="Player",
+        ),
+        "detach_script",
+        {"node_path": "Player"},
+    ),
+    (
+        "get_script_content",
+        GetScriptContentAction(
+            reason="r",
+            action="get_script_content",
+            script_path="res://scripts/probe.gd",
+        ),
+        "get_script_content",
+        {"script_path": "res://scripts/probe.gd"},
+    ),
+    (
+        "list_script_diagnostics",
+        ListScriptDiagnosticsAction(
+            reason="r",
+            action="list_script_diagnostics",
+            script_path="res://scripts/probe.gd",
+        ),
+        "list_script_diagnostics",
+        {"script_path": "res://scripts/probe.gd"},
     ),
 ]
 
@@ -763,3 +984,354 @@ def test_execute_single_action_wrapper_still_records_telemetry(
     assert len(telemetry.tool_actions) == 1
     assert telemetry.tool_actions[0].action == "rename_node"
     assert telemetry.tool_actions[0].success is True
+
+
+def test_move_child_batch_uses_same_execution_and_mutation_telemetry(
+    agent_module, monkeypatch
+):
+    """move_child inside a batch flows through the same dispatch,
+    and both tool-action and mutation telemetry are recorded."""
+    telemetry = agent_module.SessionObservability("move-batch")
+    calls = []
+
+    def fake_move_child(node_path, new_index):
+        calls.append((node_path, new_index))
+        return {
+            "success": True,
+            "action": "move_child",
+            "moved": True,
+            "old_index": 0,
+            "new_index": 1,
+            "sibling_order_before": ["A", "B"],
+            "sibling_order_after": ["B", "A"],
+            "verified_index": True,
+            "verified_order": True,
+            "undoable": True,
+        }
+
+    monkeypatch.setattr(scene_tools, "move_child", fake_move_child)
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Move the node.",
+                "actions": [
+                    {
+                        "action": "move_child",
+                        "reason": "Move to index 1.",
+                        "node_path": "A",
+                        "new_index": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    result = agent_module.execute_batch_actions(
+        decision,
+        "Move A to index 1.",
+        logging.getLogger("test-move-child"),
+        observability=telemetry,
+        turn_number=1,
+        step_number=1,
+    )
+
+    assert result["success"] is True
+    assert calls == [("A", 1)]
+    assert result["results"][0]["action"] == "move_child"
+    assert len(telemetry.tool_actions) == 1
+    assert telemetry.tool_actions[0].action == "move_child"
+    assert len(telemetry.mutations) == 1
+    assert telemetry.mutations[0].action == "move_child"
+    assert telemetry.mutations[0].verification == "verified"
+    assert telemetry.mutations[0].undoable is True
+
+def test_add_remove_group_batch_uses_same_execution_and_mutation_telemetry(
+    agent_module, monkeypatch
+):
+    """add_to_group/remove_from_group inside a batch flow through the
+    same dispatch, and both tool-action and mutation telemetry are
+    recorded."""
+    telemetry = agent_module.SessionObservability("group-batch")
+    calls = []
+
+    def fake_add_to_group(node_path, group_name):
+        calls.append(("add", node_path, group_name))
+        return {
+            "success": True,
+            "action": "add_to_group",
+            "changed": True,
+            "was_member": False,
+            "is_member": True,
+            "verified_membership": True,
+            "undoable": True,
+        }
+
+    def fake_remove_from_group(node_path, group_name):
+        calls.append(("remove", node_path, group_name))
+        return {
+            "success": True,
+            "action": "remove_from_group",
+            "changed": True,
+            "was_member": True,
+            "is_member": False,
+            "verified_membership": True,
+            "undoable": True,
+        }
+
+    monkeypatch.setattr(scene_tools, "add_to_group", fake_add_to_group)
+    monkeypatch.setattr(
+        scene_tools, "remove_from_group", fake_remove_from_group
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Manage groups.",
+                "actions": [
+                    {
+                        "action": "add_to_group",
+                        "reason": "Add to enemies.",
+                        "node_path": "Alpha",
+                        "group_name": "enemies",
+                    },
+                    {
+                        "action": "remove_from_group",
+                        "reason": "Remove from foes.",
+                        "node_path": "Beta",
+                        "group_name": "foes",
+                    },
+                ],
+            }
+        )
+    )
+
+    result = agent_module.execute_batch_actions(
+        decision,
+        "Manage groups.",
+        logging.getLogger("test-group-batch"),
+        observability=telemetry,
+        turn_number=1,
+        step_number=1,
+    )
+
+    assert result["success"] is True
+    assert calls == [
+        ("add", "Alpha", "enemies"),
+        ("remove", "Beta", "foes"),
+    ]
+    assert len(telemetry.tool_actions) == 2
+    assert telemetry.tool_actions[0].action == "add_to_group"
+    assert telemetry.tool_actions[1].action == "remove_from_group"
+    assert len(telemetry.mutations) == 2
+    assert telemetry.mutations[0].action == "add_to_group"
+    assert telemetry.mutations[0].verification == "verified"
+    assert telemetry.mutations[0].undoable is True
+    assert telemetry.mutations[1].action == "remove_from_group"
+    assert telemetry.mutations[1].verification == "verified"
+    assert telemetry.mutations[1].undoable is True
+
+
+def test_signal_batch_uses_same_execution_and_mutation_telemetry(
+    agent_module, monkeypatch
+):
+    """connect_signal/disconnect_signal inside a batch flow through
+    the same dispatch, and both tool-action and mutation telemetry
+    are recorded."""
+    telemetry = agent_module.SessionObservability("signal-batch")
+    calls = []
+
+    def fake_connect_signal(
+        node_path, signal_name, target_path, method_name, deferred=False
+    ):
+        calls.append(("connect", node_path, signal_name, target_path, method_name))
+        return {
+            "success": True,
+            "action": "connect_signal",
+            "changed": True,
+            "was_connected": False,
+            "is_connected": True,
+            "verified_connection": True,
+            "undoable": True,
+        }
+
+    def fake_disconnect_signal(
+        node_path, signal_name, target_path, method_name
+    ):
+        calls.append(("disconnect", node_path, signal_name, target_path, method_name))
+        return {
+            "success": True,
+            "action": "disconnect_signal",
+            "changed": True,
+            "was_connected": True,
+            "is_connected": False,
+            "verified_connection": True,
+            "undoable": True,
+        }
+
+    monkeypatch.setattr(scene_tools, "connect_signal", fake_connect_signal)
+    monkeypatch.setattr(
+        scene_tools, "disconnect_signal", fake_disconnect_signal
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Rewire signals.",
+                "actions": [
+                    {
+                        "action": "connect_signal",
+                        "reason": "Wire pressed to handler.",
+                        "node_path": "Alpha",
+                        "signal_name": "pressed",
+                        "target_path": "Beta",
+                        "method_name": "on_pressed",
+                    },
+                    {
+                        "action": "disconnect_signal",
+                        "reason": "Drop stale wiring.",
+                        "node_path": "Beta",
+                        "signal_name": "timeout",
+                        "target_path": "Gamma",
+                        "method_name": "on_timeout",
+                    },
+                ],
+            }
+        )
+    )
+
+    result = agent_module.execute_batch_actions(
+        decision,
+        "Rewire signals.",
+        logging.getLogger("test-signal-batch"),
+        observability=telemetry,
+        turn_number=1,
+        step_number=1,
+    )
+
+    assert result["success"] is True
+    assert calls == [
+        ("connect", "Alpha", "pressed", "Beta", "on_pressed"),
+        ("disconnect", "Beta", "timeout", "Gamma", "on_timeout"),
+    ]
+    assert len(telemetry.tool_actions) == 2
+    assert telemetry.tool_actions[0].action == "connect_signal"
+    assert telemetry.tool_actions[1].action == "disconnect_signal"
+    assert len(telemetry.mutations) == 2
+    assert telemetry.mutations[0].action == "connect_signal"
+    assert telemetry.mutations[0].verification == "verified"
+    assert telemetry.mutations[0].undoable is True
+    assert telemetry.mutations[1].action == "disconnect_signal"
+    assert telemetry.mutations[1].verification == "verified"
+    assert telemetry.mutations[1].undoable is True
+
+
+def test_script_batch_uses_same_execution_and_mutation_telemetry(
+    agent_module, monkeypatch
+):
+    """create_script/attach_script/detach_script inside a batch flow
+    through the same dispatch, and both tool-action and mutation
+    telemetry are recorded. create_script reports undoable: false
+    (file creation is not undoable) and must still be recorded as a
+    verified mutation."""
+    telemetry = agent_module.SessionObservability("script-batch")
+    calls = []
+
+    def fake_create_script(script_path, content):
+        calls.append(("create", script_path))
+        return {
+            "success": True,
+            "action": "create_script",
+            "changed": True,
+            "parse_ok": True,
+            "verified_write": True,
+            "undoable": False,
+        }
+
+    def fake_attach_script(node_path, script_path):
+        calls.append(("attach", node_path, script_path))
+        return {
+            "success": True,
+            "action": "attach_script",
+            "changed": True,
+            "was_attached": False,
+            "is_attached": True,
+            "verified_attachment": True,
+            "undoable": True,
+        }
+
+    def fake_detach_script(node_path):
+        calls.append(("detach", node_path))
+        return {
+            "success": True,
+            "action": "detach_script",
+            "changed": True,
+            "was_attached": True,
+            "is_attached": False,
+            "verified_attachment": True,
+            "undoable": True,
+        }
+
+    monkeypatch.setattr(scene_tools, "create_script", fake_create_script)
+    monkeypatch.setattr(scene_tools, "attach_script", fake_attach_script)
+    monkeypatch.setattr(scene_tools, "detach_script", fake_detach_script)
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "batch",
+                "reason": "Wire up a probe script.",
+                "actions": [
+                    {
+                        "action": "create_script",
+                        "reason": "Create the probe script.",
+                        "script_path": "res://scripts/probe.gd",
+                        "content": "extends Node\n",
+                    },
+                    {
+                        "action": "attach_script",
+                        "reason": "Attach it to Alpha.",
+                        "node_path": "Alpha",
+                        "script_path": "res://scripts/probe.gd",
+                    },
+                    {
+                        "action": "detach_script",
+                        "reason": "Detach it again.",
+                        "node_path": "Alpha",
+                    },
+                ],
+            }
+        )
+    )
+
+    result = agent_module.execute_batch_actions(
+        decision,
+        "Wire up a probe script.",
+        logging.getLogger("test-script-batch"),
+        observability=telemetry,
+        turn_number=1,
+        step_number=1,
+    )
+
+    assert result["success"] is True
+    assert calls == [
+        ("create", "res://scripts/probe.gd"),
+        ("attach", "Alpha", "res://scripts/probe.gd"),
+        ("detach", "Alpha"),
+    ]
+    assert len(telemetry.tool_actions) == 3
+    assert telemetry.tool_actions[0].action == "create_script"
+    assert len(telemetry.mutations) == 3
+    assert telemetry.mutations[0].action == "create_script"
+    assert telemetry.mutations[0].verification == "verified"
+    assert telemetry.mutations[0].undoable is False
+    assert telemetry.mutations[1].action == "attach_script"
+    assert telemetry.mutations[1].verification == "verified"
+    assert telemetry.mutations[1].undoable is True
+    assert telemetry.mutations[2].action == "detach_script"
+    assert telemetry.mutations[2].verification == "verified"
+    assert telemetry.mutations[2].undoable is True
+

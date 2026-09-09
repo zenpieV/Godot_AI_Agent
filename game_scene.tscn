@@ -5,56 +5,14 @@
 [node name="game_scene" type="Node2D" unique_id=311653702]
 script = ExtResource("1_mlf6e")
 
-[node name="BatchTestParentA" type="Node2D" parent="." unique_id=1695060785]
-
-[node name="ParityEnemy" type="CharacterBody2D" parent="BatchTestParentA" unique_id=1514639525]
-
-[node name="BatchTestParentB" type="Node2D" parent="." unique_id=1650625398]
-
-[node name="BatchTestChildRenamed" type="Node2D" parent="BatchTestParentB" unique_id=1938545443]
-
-[node name="BatchFailureA" type="Node2D" parent="." unique_id=1173263320]
-
 [node name="Player" type="CharacterBody2D" parent="." unique_id=189480600]
-
-[node name="Sprite2D" type="Sprite2D" parent="Player" unique_id=573608139]
 
 [node name="LeftArm" type="Node2D" parent="Player" unique_id=1644082224]
 
-[node name="RightArm" type="Node2D" parent="Player" unique_id=54746392]
-
 [node name="LeftLeg" type="Node2D" parent="Player" unique_id=73173592]
+
+[node name="RightArm" type="Node2D" parent="Player" unique_id=54746392]
 
 [node name="RightLeg" type="Node2D" parent="Player" unique_id=762499435]
 
-[node name="SessionLifecycleTest" type="Node2D" parent="Player" unique_id=1167417213]
-
-[node name="BatchVerifyTest" type="Node2D" parent="." unique_id=1497792747]
-
-[node name="SingleActionRegressionTest" type="Node2D" parent="." unique_id=977741843]
-
-[node name="GroqBatchTest" type="Node2D" parent="." unique_id=1459226354]
-
-[node name="GroqTest2" type="Node2D" parent="." unique_id=419236069]
-
-[node name="GroqChildRenamed" type="CharacterBody2D" parent="GroqTest2" unique_id=951343847]
-
-[node name="PlayerDuplicate" type="CharacterBody2D" parent="GroqTest2" unique_id=947779127]
-
-[node name="PlayerCopy" type="CharacterBody2D" parent="." unique_id=1536243628]
-
-[node name="PlayerCopy2" type="CharacterBody2D" parent="." unique_id=1414236038]
-
-[node name="PlayerPersistenceTest" type="CharacterBody2D" parent="." unique_id=1767557948]
-
-[node name="Sprite2D" type="Sprite2D" parent="PlayerPersistenceTest" unique_id=2008992824]
-
-[node name="ParityProbe" type="Node2D" parent="." unique_id=471846653]
-
-[node name="GeminiBoundarySkippedName" type="Node2D" parent="." unique_id=1715435260]
-
-[node name="SessionTurn3" type="CharacterBody2D" parent="." unique_id=1428447142]
-
-[node name="SessionTurn1" type="CharacterBody2D" parent="SessionTurn3" unique_id=295237615]
-
-[node name="SessionTurn2" type="CharacterBody2D" parent="SessionTurn3" unique_id=1016905291]
+[node name="Sprite2D" type="Sprite2D" parent="Player" unique_id=573608139]

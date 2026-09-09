@@ -23,6 +23,25 @@ _BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
     "delete_node": ("node_path",),
     "reparent_node": ("node_path", "new_parent_path"),
     "set_properties": ("node_path", "properties_json"),
+    "move_child": ("node_path", "new_index"),
+    "add_to_group": ("node_path", "group_name"),
+    "remove_from_group": ("node_path", "group_name"),
+    "connect_signal": (
+        "node_path",
+        "signal_name",
+        "target_path",
+        "method_name",
+        "deferred",
+    ),
+    "disconnect_signal": (
+        "node_path",
+        "signal_name",
+        "target_path",
+        "method_name",
+    ),
+    "create_script": ("script_path", "content"),
+    "attach_script": ("node_path", "script_path"),
+    "detach_script": ("node_path",),
 }
 
 # Fields identifying the RESOURCE being mutated (the "target"),
@@ -42,6 +61,30 @@ _MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     "delete_node": ("node_path",),
     "reparent_node": ("node_path",),
     "set_properties": ("node_path",),
+    "move_child": ("node_path",),
+    "add_to_group": ("node_path",),
+    "remove_from_group": ("node_path",),
+    "connect_signal": (
+        "node_path",
+        "signal_name",
+        "target_path",
+        "method_name",
+    ),
+    "disconnect_signal": (
+        "node_path",
+        "signal_name",
+        "target_path",
+        "method_name",
+    ),
+    # create_script mutates the PROJECT (a file), not the
+    # scene; the mutated resource is the script file itself.
+    "create_script": ("script_path",),
+    # attach/detach mutate the node's script attachment, so
+    # the target is the node (same conservatism as the
+    # group mutations: a skipped attach on Player blocks
+    # any further attach on Player regardless of script).
+    "attach_script": ("node_path",),
+    "detach_script": ("node_path",),
 }
 
 

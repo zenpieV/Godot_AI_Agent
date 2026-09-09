@@ -5,6 +5,9 @@ extends EditorPlugin
 const AIAgentEditorToolsScript = preload(
 	"res://addons/Execution_Agent/scene/ai_agent_editor_tools.gd"
 )
+const AIAgentScriptToolsScript = preload(
+	"res://addons/Execution_Agent/scene/ai_agent_script_tools.gd"
+)
 const AIAgentRouterScript = preload(
 	"res://addons/Execution_Agent/bridge/ai_agent_router.gd"
 )
@@ -19,6 +22,7 @@ var variant_serializer: AIAgentVariantSerializer
 var node_tools: AIAgentNodeTools
 var property_tools: AIAgentPropertyTools
 var editor_tools: RefCounted
+var script_tools: AIAgentScriptTools
 var router: RefCounted
 var http_bridge: AIAgentHTTP
 
@@ -99,10 +103,16 @@ func initialize_modules() -> void:
 		undo_redo
 	)
 
+	script_tools = AIAgentScriptToolsScript.new(
+		scene_helpers,
+		undo_redo
+	)
+
 	router = AIAgentRouterScript.new(
 		node_tools,
 		property_tools,
-		editor_tools
+		editor_tools,
+		script_tools
 	)
 
 	http_bridge = AIAgentHTTP.new(

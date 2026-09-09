@@ -177,6 +177,31 @@ class BatchTelemetry:
 
 
 @dataclass
+class MutationTelemetry:
+    """Telemetry for a single mutation action.
+
+    Carries the structured mutation contract forward: outcome,
+    verification status, and editor-reported undoability. It is
+    recorded in addition to (never instead of) the corresponding
+    ToolActionTelemetry entry.
+    """
+
+    session_id: str
+    turn_number: int
+    step_number: int
+    action: str
+    target: tuple
+    success: bool
+    verification: str
+    undoable: object = None
+    error: object = None
+    duration_ms: float = 0.0
+    model_call_id: Optional[str] = None
+    contract_violation: str = ""
+
+
+
+@dataclass
 class CompactionTelemetry:
     """Telemetry for a context compaction event."""
 
@@ -213,8 +238,12 @@ class SessionSummary:
     batch_count: int
     total_batched_actions: int
     compaction_count: int
-    duration_ms: float
-    termination_reason: str
+    mutation_count: int = 0
+    successful_mutation_count: int = 0
+    failed_mutation_count: int = 0
+    unverified_mutation_count: int = 0
+    duration_ms: float = 0.0
+    termination_reason: str = ""
 
 
 def new_call_id() -> str:
@@ -238,6 +267,7 @@ class SessionObservability:
         self.tool_actions: list[ToolActionTelemetry] = []
         self.batches: list[BatchTelemetry] = []
         self.compactions: list[CompactionTelemetry] = []
+        self.mutations: list[MutationTelemetry] = []
         self._start_time = time.monotonic()
 
     def record_model_call(
@@ -287,6 +317,33 @@ class SessionObservability:
                 success=success,
                 duration_ms=duration_ms,
                 model_call_id=model_call_id,
+            )
+        )
+
+    def record_mutation(
+        self,
+        record,
+        model_call_id: Optional[str] = None,
+    ) -> None:
+        """Record one mutation from a mutation.MutationRecord.
+
+        Accepts the already-built MutationRecord so telemetry stays
+        a dumb collector; the contract logic lives in agent/mutation.py.
+        """
+        self.mutations.append(
+            MutationTelemetry(
+                session_id=self.session_id,
+                turn_number=record.turn_number,
+                step_number=record.step_number,
+                action=record.action,
+                target=record.target,
+                success=record.success,
+                verification=record.verification,
+                undoable=record.undoable,
+                error=record.error,
+                duration_ms=record.duration_ms,
+                model_call_id=model_call_id,
+                contract_violation=record.contract_violation,
             )
         )
 
@@ -382,6 +439,18 @@ class SessionObservability:
         total_batched = sum(
             b.batch_size for b in self.batches
         )
+        successful_mutations = sum(
+            1 for m in self.mutations if m.success
+        )
+        failed_mutations = sum(
+            1 for m in self.mutations if not m.success
+        )
+        unverified_mutations = sum(
+            1
+            for m in self.mutations
+            if m.success
+            and m.verification == "unverified"
+        )
 
         duration_ms = (
             time.monotonic() - self._start_time
@@ -412,6 +481,10 @@ class SessionObservability:
             batch_count=len(self.batches),
             total_batched_actions=total_batched,
             compaction_count=len(self.compactions),
+            mutation_count=len(self.mutations),
+            successful_mutation_count=successful_mutations,
+            failed_mutation_count=failed_mutations,
+            unverified_mutation_count=unverified_mutations,
             duration_ms=duration_ms,
             termination_reason=termination_reason,
         )

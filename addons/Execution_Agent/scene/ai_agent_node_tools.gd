@@ -1307,6 +1307,1485 @@ func reparent_node_from_request(
 
 
 # ==========================================
+# move_child
+# ==========================================
+# Moves an existing child within its parent to a
+# requested sibling index as one undoable
+# EditorUndoRedoManager action. The result reports
+# the real sibling order read back from the scene
+# after the move (never fabricated).
+
+
+func move_child_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if (
+		not data.has("node_path")
+		or not data.has("new_index")
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"move_child requires node_path "
+				+ "and new_index."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	var raw_index = data["new_index"]
+
+	if (
+		typeof(raw_index) != TYPE_INT
+		and typeof(raw_index) != TYPE_FLOAT
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"move_child new_index must be "
+				+ "an integer sibling index."
+			)
+		}
+
+	var new_index := int(raw_index)
+
+	if (
+		float(raw_index) != float(new_index)
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"move_child new_index must be "
+				+ "an integer sibling index."
+			)
+		}
+
+	var node_result: Dictionary = (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	var target_name: String = (
+		str(target_node.name)
+	)
+
+	if target_node == edited_scene_root:
+
+		return {
+			"success": false,
+			"error": (
+				"Moving the scene root is not "
+				+ "allowed."
+			)
+		}
+
+	var parent_node: Node = (
+		target_node.get_parent()
+	)
+
+	if parent_node == null:
+
+		return {
+			"success": false,
+			"error": (
+				"Target node has no parent and "
+				+ "cannot be moved."
+			)
+		}
+
+	var old_index: int = (
+		target_node.get_index()
+	)
+
+	var child_count: int = (
+		parent_node.get_child_count()
+	)
+
+	if (
+		new_index < 0
+		or new_index >= child_count
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"move_child new_index "
+				+ str(new_index)
+				+ " is out of range: the parent "
+				+ str(scene_helpers
+					.get_relative_node_path(
+						edited_scene_root,
+						parent_node
+					))
+				+ " has "
+				+ str(child_count)
+				+ " child(ren); valid indices "
+				+ "are 0 to "
+				+ str(child_count - 1)
+				+ "."
+			)
+		}
+
+	var sibling_order_before: Array = []
+	for child in parent_node.get_children():
+		sibling_order_before.append(
+			str(child.name)
+		)
+
+	# --------------------------------------
+	# Deterministic no-op handling
+	# --------------------------------------
+	# Already at the requested index: no undo
+	# history is created and nothing changes.
+	# The reported order is still verified
+	# against the actual scene state.
+
+	if new_index == old_index:
+
+		return {
+			"success": true,
+			"action": "move_child",
+			"message": (
+				"Node is already at sibling "
+				+ "index "
+				+ str(new_index)
+				+ "; no move was performed."
+			),
+			"node_path": node_path,
+			"node_name": target_name,
+			"requested_index": new_index,
+			"old_index": old_index,
+			"new_index": new_index,
+			"moved": false,
+			"parent_path": (
+				scene_helpers
+				.get_relative_node_path(
+					edited_scene_root,
+					parent_node
+				)
+			),
+			"sibling_order_before": (
+				sibling_order_before
+			),
+			"sibling_order_after": (
+				sibling_order_before.duplicate()
+			),
+			"verified_index": true,
+			"verified_order": true,
+			"undoable": false
+		}
+
+	# The editor undo manager is only available
+	# inside the running editor; a headless
+	# SceneTree process reports an explicit
+	# unavailable error instead of crashing or
+	# mutating without undo support.
+
+	if undo_redo == null:
+
+		return {
+			"success": false,
+			"action": "move_child",
+			"error": (
+				"move_child requires the plugin-owned "
+				+ "EditorUndoRedoManager, which is only "
+				+ "available inside the running Godot "
+				+ "editor."
+			)
+		}
+
+	undo_redo.create_action(
+		"AI Agent: Move "
+		+ target_name
+		+ " to index "
+		+ str(new_index)
+	)
+
+	undo_redo.add_do_method(
+		parent_node,
+		"move_child",
+		target_node,
+		new_index
+	)
+
+	undo_redo.add_undo_method(
+		parent_node,
+		"move_child",
+		target_node,
+		old_index
+	)
+
+	undo_redo.commit_action()
+
+	# --------------------------------------
+	# Post-operation verification
+	# --------------------------------------
+	# Read the real resulting index and the
+	# real sibling order back from the scene.
+	# The expected order is computed by
+	# simulating the move on the recorded
+	# before-order, so verified_order compares
+	# actual scene state against the move
+	# semantics, not against the request.
+
+	var verified_index: bool = (
+		target_node.get_index() == new_index
+	)
+
+	var sibling_order_after: Array = []
+	for child in parent_node.get_children():
+		sibling_order_after.append(
+			str(child.name)
+		)
+
+	var expected_order: Array = (
+		sibling_order_before.duplicate()
+	)
+	expected_order.remove_at(old_index)
+	expected_order.insert(
+		new_index,
+		target_name
+	)
+
+	var verified_order: bool = (
+		sibling_order_after == expected_order
+	)
+
+	return {
+		"success": true,
+		"action": "move_child",
+		"message": (
+			"Node moved successfully "
+			+ "in the Godot editor."
+		),
+		"node_path": node_path,
+		"node_name": target_name,
+		"requested_index": new_index,
+		"old_index": old_index,
+		"new_index": (
+			target_node.get_index()
+		),
+		"moved": true,
+		"parent_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				parent_node
+			)
+		),
+		"sibling_order_before": (
+			sibling_order_before
+		),
+		"sibling_order_after": (
+			sibling_order_after
+		),
+		"verified_index": verified_index,
+		"verified_order": verified_order,
+		"undoable": true
+	}
+
+
+# ==========================================
+# add_to_group / remove_from_group
+# ==========================================
+# Group membership mutations for a node in the
+# currently edited scene. Each change is one
+# undoable EditorUndoRedoManager action. Membership
+# is read back from the node's real instance state
+# (is_in_group) after the mutation and reported as
+# verified membership; verification is never
+# fabricated.
+#
+# Idempotent cases (adding a node that is already a
+# member, removing a node that is not a member) are
+# deterministic successes with no scene change and
+# no undo history.
+
+
+func _validate_group_mutation_request(
+	data: Dictionary,
+	action_name: String
+) -> Dictionary:
+	# Shared request validation for both group
+	# mutations. Returns {"ok": true, "group_name": ...}
+	# or a structured failure result.
+
+	if not data.has("group_name"):
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires group_name."
+			)
+		}
+
+	var raw_group = data["group_name"]
+
+	if typeof(raw_group) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " group_name must be a "
+				+ "string."
+			)
+		}
+
+	var group_name: String = (
+		str(raw_group).strip_edges()
+	)
+
+	if group_name.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires a non-empty "
+				+ "group_name."
+			)
+		}
+
+	return {
+		"ok": true,
+		"group_name": group_name
+	}
+
+
+func add_to_group_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var validation := (
+		_validate_group_mutation_request(
+			data,
+			"add_to_group"
+		)
+	)
+
+	if not validation.get("ok", false):
+		return validation
+
+	var group_name: String = (
+		validation["group_name"]
+	)
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"add_to_group requires node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	var node_result: Dictionary = (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	var target_name: String = (
+		str(target_node.name)
+	)
+
+	var was_member: bool = (
+		target_node.is_in_group(group_name)
+	)
+
+	# Deterministic idempotent case: already a
+	# member. No duplicate state, no undo history,
+	# membership still verified against the node.
+
+	if was_member:
+
+		return {
+			"success": true,
+			"action": "add_to_group",
+			"message": (
+				"Node is already in group "
+				+ group_name
+				+ "; no change was made."
+			),
+			"node_path": node_path,
+			"node_name": target_name,
+			"group_name": group_name,
+			"was_member": true,
+			"is_member": true,
+			"changed": false,
+			"verified_membership": true,
+			"undoable": false
+		}
+
+	# The editor undo manager is only available
+	# inside the running editor; a headless
+	# SceneTree process reports an explicit
+	# unavailable error instead of mutating
+	# without undo support.
+
+	if undo_redo == null:
+
+		return {
+			"success": false,
+			"action": "add_to_group",
+			"error": (
+				"add_to_group requires the plugin-owned "
+				+ "EditorUndoRedoManager, which is only "
+				+ "available inside the running Godot "
+				+ "editor."
+			)
+		}
+
+	undo_redo.create_action(
+		"AI Agent: Add "
+		+ target_name
+		+ " to group "
+		+ group_name
+	)
+
+	undo_redo.add_do_method(
+		target_node,
+		"add_to_group",
+		group_name
+	)
+
+	undo_redo.add_undo_method(
+		target_node,
+		"remove_from_group",
+		group_name
+	)
+
+	undo_redo.commit_action()
+
+	# Post-mutation verification: read the real
+	# membership back from the node.
+
+	var is_member: bool = (
+		target_node.is_in_group(group_name)
+	)
+
+	return {
+		"success": true,
+		"action": "add_to_group",
+		"message": (
+			"Node added to group successfully "
+			+ "in the Godot editor."
+		),
+		"node_path": node_path,
+		"node_name": target_name,
+		"group_name": group_name,
+		"was_member": false,
+		"is_member": is_member,
+		"changed": true,
+		"verified_membership": is_member,
+		"undoable": true
+	}
+
+
+func remove_from_group_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var validation := (
+		_validate_group_mutation_request(
+			data,
+			"remove_from_group"
+		)
+	)
+
+	if not validation.get("ok", false):
+		return validation
+
+	var group_name: String = (
+		validation["group_name"]
+	)
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"remove_from_group requires node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	var node_result: Dictionary = (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	var target_name: String = (
+		str(target_node.name)
+	)
+
+	var was_member: bool = (
+		target_node.is_in_group(group_name)
+	)
+
+	# Deterministic idempotent case: not a member.
+	# No scene change, no undo history, membership
+	# still verified against the node.
+
+	if not was_member:
+
+		return {
+			"success": true,
+			"action": "remove_from_group",
+			"message": (
+				"Node is not in group "
+				+ group_name
+				+ "; no change was made."
+			),
+			"node_path": node_path,
+			"node_name": target_name,
+			"group_name": group_name,
+			"was_member": false,
+			"is_member": false,
+			"changed": false,
+			"verified_membership": true,
+			"undoable": false
+		}
+
+	if undo_redo == null:
+
+		return {
+			"success": false,
+			"action": "remove_from_group",
+			"error": (
+				"remove_from_group requires the plugin-owned "
+				+ "EditorUndoRedoManager, which is only "
+				+ "available inside the running Godot "
+				+ "editor."
+			)
+		}
+
+	undo_redo.create_action(
+		"AI Agent: Remove "
+		+ target_name
+		+ " from group "
+		+ group_name
+	)
+
+	undo_redo.add_do_method(
+		target_node,
+		"remove_from_group",
+		group_name
+	)
+
+	undo_redo.add_undo_method(
+		target_node,
+		"add_to_group",
+		group_name
+	)
+
+	undo_redo.commit_action()
+
+	var is_member: bool = (
+		target_node.is_in_group(group_name)
+	)
+
+	return {
+		"success": true,
+		"action": "remove_from_group",
+		"message": (
+			"Node removed from group successfully "
+			+ "in the Godot editor."
+		),
+		"node_path": node_path,
+		"node_name": target_name,
+		"group_name": group_name,
+		"was_member": true,
+		"is_member": is_member,
+		"changed": true,
+		"verified_membership": is_member == false,
+		"undoable": true
+	}
+
+
+# ==========================================
+# Signal connections
+# ==========================================
+# Signal-connection tools for the currently edited
+# scene: one read-only inspector for live connection
+# state, plus two mutations (connect_signal,
+# disconnect_signal) performed as editor-native,
+# undoable EditorUndoRedoManager actions with
+# read-back verification.
+#
+# Connections are addressed exactly like the editor's
+# Connect dialog: emitter node path + signal name ->
+# target node path + method name. Callable
+# expressions and bound arguments are deliberately
+# not supported: the connection identity must stay
+# deterministic and JSON-safe.
+
+
+func _validate_signal_mutation_request(
+	data: Dictionary,
+	action_name: String
+) -> Dictionary:
+	# Shared request validation for both signal
+	# mutations. Returns {"ok": true, ...} or a
+	# structured failure result.
+
+	var required_string_fields := [
+		"signal_name",
+		"target_path",
+		"method_name",
+	]
+
+	var validated := {
+		"ok": true
+	}
+
+	for field_name in required_string_fields:
+
+		if not data.has(field_name):
+
+			return {
+				"success": false,
+				"error": (
+					action_name
+					+ " requires "
+					+ field_name
+					+ "."
+				)
+			}
+
+		var raw_value = data[field_name]
+
+		if typeof(raw_value) != TYPE_STRING:
+
+			return {
+				"success": false,
+				"error": (
+					action_name
+					+ " "
+					+ field_name
+					+ " must be a string."
+				)
+			}
+
+		var value: String = (
+			str(raw_value).strip_edges()
+		)
+
+		if value.is_empty():
+
+			return {
+				"success": false,
+				"error": (
+					action_name
+					+ " requires a non-empty "
+					+ field_name
+					+ "."
+				)
+			}
+
+		validated[field_name] = value
+
+	return validated
+
+
+func list_node_connections_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"list_node_connections requires "
+				+ "node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	if node_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"list_node_connections requires a "
+				+ "non-empty node_path (use \".\" "
+				+ "for the edited scene root)."
+			)
+		}
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	# Connection flags are serialized as plain
+	# booleans so the result stays JSON-safe and
+	# deterministic.
+
+	# Editor plumbing and other peers outside the edited
+	# scene (e.g. SceneTreeEditor hooks into script_changed)
+	# are omitted from the entries and reported only as a
+	# count: the bridge operates exclusively inside the
+	# edited scene, and unpersisted editor hooks are noise
+	# for agent reasoning. Nothing is silently hidden.
+
+	var internal_omitted: int = 0
+
+	var incoming: Array = []
+
+	for raw_connection in (
+		target_node.get_incoming_connections()
+	):
+
+		# Type-check Variants before any typed
+		# assignment: a malformed connection entry
+		# is skipped, never a script error.
+		#
+		# get_incoming_connections() names the
+		# receiving callable "method" in early 4.x
+		# releases and "callable" in later ones, so
+		# accept either key.
+
+		var raw_incoming_signal: Variant = (
+			raw_connection.get("signal")
+		)
+
+		var raw_incoming_callable: Variant = (
+			raw_connection.get("callable")
+		)
+
+		if not (raw_incoming_callable is Callable):
+
+			raw_incoming_callable = (
+				raw_connection.get("method")
+			)
+
+		if not (raw_incoming_signal is Signal):
+			continue
+
+		if not (raw_incoming_callable is Callable):
+			continue
+
+		var incoming_signal: Signal = (
+			raw_incoming_signal
+		)
+
+		var incoming_callable: Callable = (
+			raw_incoming_callable
+		)
+
+		var raw_source_node: Variant = (
+			incoming_signal.get_object()
+		)
+
+		if not raw_source_node is Node:
+			continue
+
+		var source_node: Node = raw_source_node
+
+		if source_node != edited_scene_root \
+				and not edited_scene_root.is_ancestor_of(
+					source_node
+				):
+
+			internal_omitted += 1
+
+			continue
+
+		var flags: int = int(
+			raw_connection.get("flags", 0)
+		)
+
+		incoming.append(
+			{
+				"signal": str(
+					incoming_signal.get_name()
+				),
+				"source": (
+					scene_helpers
+					.get_relative_node_path(
+						edited_scene_root,
+						source_node
+					)
+				),
+				"source_name": (
+					str(source_node.name)
+				),
+				"method": str(
+					incoming_callable.get_method()
+				),
+				"deferred": (
+					flags & CONNECT_DEFERRED
+				) != 0,
+				"persistent": (
+					flags & CONNECT_PERSIST
+				) != 0,
+				"one_shot": (
+					flags & CONNECT_ONE_SHOT
+				) != 0,
+			}
+		)
+
+	var outgoing: Array = []
+
+	for raw_signal in target_node.get_signal_list():
+
+		var signal_name: String = str(
+			raw_signal.get("name", "")
+		)
+
+		if signal_name.is_empty():
+			continue
+
+		for raw_connection in (
+			target_node.get_signal_connection_list(
+				signal_name
+			)
+		):
+
+			var raw_outgoing_callable: Variant = (
+				raw_connection.get("callable")
+			)
+
+			if not (raw_outgoing_callable is Callable):
+				continue
+
+			var outgoing_callable: Callable = (
+				raw_outgoing_callable
+			)
+
+			var raw_peer_node: Variant = (
+				outgoing_callable.get_object()
+			)
+
+			if not raw_peer_node is Node:
+				continue
+
+			var peer_node: Node = raw_peer_node
+
+			if peer_node != edited_scene_root \
+					and not edited_scene_root.is_ancestor_of(
+						peer_node
+					):
+
+				internal_omitted += 1
+
+				continue
+
+			var flags: int = int(
+				raw_connection.get("flags", 0)
+			)
+
+			outgoing.append(
+				{
+					"signal": signal_name,
+					"target": (
+						scene_helpers
+						.get_relative_node_path(
+							edited_scene_root,
+							peer_node
+						)
+					),
+					"target_name": (
+						str(peer_node.name)
+					),
+					"method": str(
+						outgoing_callable.get_method()
+					),
+					"deferred": (
+						flags & CONNECT_DEFERRED
+					) != 0,
+					"persistent": (
+						flags & CONNECT_PERSIST
+					) != 0,
+					"one_shot": (
+						flags & CONNECT_ONE_SHOT
+					) != 0,
+				}
+			)
+
+	# Deterministic ordering: by signal name, then
+	# peer path, then method name.
+
+	incoming.sort_custom(
+		func(a, b):
+			if a["signal"] != b["signal"]:
+				return a["signal"] < b["signal"]
+			if a["source"] != b["source"]:
+				return a["source"] < b["source"]
+			return a["method"] < b["method"]
+	)
+
+	outgoing.sort_custom(
+		func(a, b):
+			if a["signal"] != b["signal"]:
+				return a["signal"] < b["signal"]
+			if a["target"] != b["target"]:
+				return a["target"] < b["target"]
+			return a["method"] < b["method"]
+	)
+
+	return {
+		"success": true,
+		"action": "list_node_connections",
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": (
+			str(target_node.name)
+		),
+		"node_type": (
+			target_node.get_class()
+		),
+		"total_incoming": incoming.size(),
+		"total_outgoing": outgoing.size(),
+		"internal_connections_omitted": internal_omitted,
+		"incoming": incoming,
+		"outgoing": outgoing,
+	}
+
+
+func _resolve_connection_nodes(
+	data: Dictionary,
+	action_name: String
+) -> Dictionary:
+	# Shared node resolution for both signal mutations.
+	# Returns {"ok": true, ...} with the emitter node,
+	# the target node, and the validated strings, or a
+	# structured failure result.
+
+	var validation := (
+		_validate_signal_mutation_request(
+			data,
+			action_name
+		)
+	)
+
+	if not validation.get("ok", false):
+		return validation
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	var emitter_result: Dictionary = (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not emitter_result["success"]:
+		return emitter_result
+
+	var target_result: Dictionary = (
+		scene_helpers
+		.resolve_node_or_error(
+			validation["target_path"]
+		)
+	)
+
+	if not target_result["success"]:
+		return target_result
+
+	var emitter_node: Node = (
+		emitter_result["node"]
+	)
+
+	var target_node: Node = (
+		target_result["node"]
+	)
+
+	var signal_name: String = (
+		validation["signal_name"]
+	)
+
+	var method_name: String = (
+		validation["method_name"]
+	)
+
+	# The bridge is the authoritative environment for
+	# validating Godot wiring: never connect a signal
+	# that does not exist or a method that cannot be
+	# called.
+
+	if not emitter_node.has_signal(signal_name):
+
+		return {
+			"success": false,
+			"error": (
+				action_name + ": node "
+				+ str(emitter_node.name)
+				+ " has no signal named "
+				+ signal_name
+				+ ". Use list_node_signals to "
+				+ "discover valid signal names."
+			)
+		}
+
+	if not target_node.has_method(method_name):
+
+		return {
+			"success": false,
+			"error": (
+				action_name + ": node "
+				+ str(target_node.name)
+				+ " has no method named "
+				+ method_name
+				+ "."
+			)
+		}
+
+	return {
+		"ok": true,
+		"emitter_node": emitter_node,
+		"target_node": target_node,
+		"node_path": node_path,
+		"signal_name": signal_name,
+		"target_path": validation["target_path"],
+		"method_name": method_name,
+	}
+
+
+func connect_signal_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var resolved := (
+		_resolve_connection_nodes(
+			data,
+			"connect_signal"
+		)
+	)
+
+	if not resolved.get("ok", false):
+		return resolved
+
+	# Deferred connections are opt-in; anything other
+	# than a real boolean is a request error, not a
+	# silent default.
+
+	var deferred: bool = false
+
+	if data.has("deferred"):
+
+		if typeof(data["deferred"]) != TYPE_BOOL:
+
+			return {
+				"success": false,
+				"error": (
+					"connect_signal deferred must "
+					+ "be a boolean."
+				)
+			}
+
+		deferred = data["deferred"]
+
+	var emitter_node: Node = (
+		resolved["emitter_node"]
+	)
+
+	var target_node: Node = (
+		resolved["target_node"]
+	)
+
+	var signal_name: String = (
+		resolved["signal_name"]
+	)
+
+	var method_name: String = (
+		resolved["method_name"]
+	)
+
+	var callable: Callable = Callable(
+		target_node,
+		method_name
+	)
+
+	var was_connected: bool = (
+		emitter_node.is_connected(
+			signal_name,
+			callable
+		)
+	)
+
+	var emitter_name: String = (
+		str(emitter_node.name)
+	)
+
+	var target_name: String = (
+		str(target_node.name)
+	)
+
+	# Deterministic idempotent case: already
+	# connected. No duplicate connection, no undo
+	# history, connection still verified against the
+	# emitter.
+
+	if was_connected:
+
+		return {
+			"success": true,
+			"action": "connect_signal",
+			"message": (
+				"Signal is already connected; "
+				+ "no change was made."
+			),
+			"node_path": resolved["node_path"],
+			"node_name": emitter_name,
+			"signal_name": signal_name,
+			"target_path": resolved["target_path"],
+			"target_name": target_name,
+			"method_name": method_name,
+			"deferred": deferred,
+			"was_connected": true,
+			"is_connected": true,
+			"changed": false,
+			"verified_connection": true,
+			"undoable": false
+		}
+
+	# The editor undo manager is only available
+	# inside the running editor; a headless
+	# SceneTree process reports an explicit
+	# unavailable error instead of mutating
+	# without undo support.
+
+	if undo_redo == null:
+
+		return {
+			"success": false,
+			"action": "connect_signal",
+			"error": (
+				"connect_signal requires the plugin-owned "
+				+ "EditorUndoRedoManager, which is only "
+				+ "available inside the running Godot "
+				+ "editor."
+			)
+		}
+
+	# Editor-native connections are persistent so the
+	# wiring is saved with the scene, matching what
+	# the editor's Connect dialog produces.
+
+	var connect_flags: int = CONNECT_PERSIST
+
+	if deferred:
+
+		connect_flags |= CONNECT_DEFERRED
+
+	undo_redo.create_action(
+		"AI Agent: Connect "
+		+ emitter_name
+		+ "."
+		+ signal_name
+		+ " to "
+		+ target_name
+		+ "."
+		+ method_name
+	)
+
+	undo_redo.add_do_method(
+		emitter_node,
+		"connect",
+		signal_name,
+		callable,
+		connect_flags
+	)
+
+	undo_redo.add_undo_method(
+		emitter_node,
+		"disconnect",
+		signal_name,
+		callable
+	)
+
+	undo_redo.commit_action()
+
+	# Post-mutation verification: read the real
+	# connection state back from the emitter.
+
+	var is_connected: bool = (
+		emitter_node.is_connected(
+			signal_name,
+			callable
+		)
+	)
+
+	return {
+		"success": true,
+		"action": "connect_signal",
+		"message": (
+			"Signal connected successfully "
+			+ "in the Godot editor."
+		),
+		"node_path": resolved["node_path"],
+		"node_name": emitter_name,
+		"signal_name": signal_name,
+		"target_path": resolved["target_path"],
+		"target_name": target_name,
+		"method_name": method_name,
+		"deferred": deferred,
+		"was_connected": false,
+		"is_connected": is_connected,
+		"changed": true,
+		"verified_connection": is_connected,
+		"undoable": true
+	}
+
+
+func disconnect_signal_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var resolved := (
+		_resolve_connection_nodes(
+			data,
+			"disconnect_signal"
+		)
+	)
+
+	if not resolved.get("ok", false):
+		return resolved
+
+	var emitter_node: Node = (
+		resolved["emitter_node"]
+	)
+
+	var target_node: Node = (
+		resolved["target_node"]
+	)
+
+	var signal_name: String = (
+		resolved["signal_name"]
+	)
+
+	var method_name: String = (
+		resolved["method_name"]
+	)
+
+	var callable: Callable = Callable(
+		target_node,
+		method_name
+	)
+
+	var was_connected: bool = (
+		emitter_node.is_connected(
+			signal_name,
+			callable
+		)
+	)
+
+	var emitter_name: String = (
+		str(emitter_node.name)
+	)
+
+	var target_name: String = (
+		str(target_node.name)
+	)
+
+	# Deterministic idempotent case: not connected.
+	# No scene change, no undo history, state still
+	# verified against the emitter.
+
+	if not was_connected:
+
+		return {
+			"success": true,
+			"action": "disconnect_signal",
+			"message": (
+				"Signal is not connected; "
+				+ "no change was made."
+			),
+			"node_path": resolved["node_path"],
+			"node_name": emitter_name,
+			"signal_name": signal_name,
+			"target_path": resolved["target_path"],
+			"target_name": target_name,
+			"method_name": method_name,
+			"was_connected": false,
+			"is_connected": false,
+			"changed": false,
+			"verified_connection": true,
+			"undoable": false
+		}
+
+	if undo_redo == null:
+
+		return {
+			"success": false,
+			"action": "disconnect_signal",
+			"error": (
+				"disconnect_signal requires the plugin-owned "
+				+ "EditorUndoRedoManager, which is only "
+				+ "available inside the running Godot "
+				+ "editor."
+			)
+		}
+
+	# Undo must restore the original connection, so
+	# capture the real flags of the existing
+	# connection before removing it.
+
+	var original_flags: int = CONNECT_PERSIST
+
+	for raw_connection in (
+		emitter_node.get_signal_connection_list(
+			signal_name
+		)
+	):
+
+		var existing: Variant = (
+			raw_connection.get("callable")
+		)
+
+		if not (existing is Callable):
+			continue
+
+		if existing == callable:
+
+			original_flags = int(
+				raw_connection.get(
+					"flags",
+					CONNECT_PERSIST
+				)
+			)
+
+			break
+
+	undo_redo.create_action(
+		"AI Agent: Disconnect "
+		+ emitter_name
+		+ "."
+		+ signal_name
+		+ " from "
+		+ target_name
+		+ "."
+		+ method_name
+	)
+
+	undo_redo.add_do_method(
+		emitter_node,
+		"disconnect",
+		signal_name,
+		callable
+	)
+
+	undo_redo.add_undo_method(
+		emitter_node,
+		"connect",
+		signal_name,
+		callable,
+		original_flags
+	)
+
+	undo_redo.commit_action()
+
+	var is_connected: bool = (
+		emitter_node.is_connected(
+			signal_name,
+			callable
+		)
+	)
+
+	return {
+		"success": true,
+		"action": "disconnect_signal",
+		"message": (
+			"Signal disconnected successfully "
+			+ "in the Godot editor."
+		),
+		"node_path": resolved["node_path"],
+		"node_name": emitter_name,
+		"signal_name": signal_name,
+		"target_path": resolved["target_path"],
+		"target_name": target_name,
+		"method_name": method_name,
+		"was_connected": true,
+		"is_connected": is_connected,
+		"changed": true,
+		"verified_connection": is_connected == false,
+		"undoable": true
+	}
+
+
+# ==========================================
 # duplicate_node
 # ==========================================
 

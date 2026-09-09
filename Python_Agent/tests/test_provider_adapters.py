@@ -87,6 +87,164 @@ def test_gemini_disambiguates_count_nodes_schema():
     )
 
 
+
+def test_gemini_excludes_overlapping_group_actions_from_nested_batch():
+    """Regression test for the Gemini 400 INVALID_ARGUMENT bug that
+    appears after adding structurally identical actions (add_to_group /
+    remove_from_group) to the AgentDecision union.
+
+    After the Gemini adapter removes the discriminator and converts
+    oneOf to anyOf, AddToGroupAction and RemoveFromGroupAction present
+    overlapping branches in the nested batch.actions union (same
+    properties + required fields). Gemini rejects the entire request
+    with 400 INVALID_ARGUMENT.
+
+    The fix excludes both branches from the provider-only nested batch
+    union while retaining them as valid standalone actions and in the
+    public Pydantic schema.
+    """
+    from agent.schemas import AgentDecision
+    from pydantic import TypeAdapter
+
+    raw_schema = TypeAdapter(AgentDecision).json_schema()
+    schema = gemini_provider.make_gemini_schema_compatible(raw_schema)
+    schema_text = json.dumps(schema)
+
+    # The normalized schema must not contain oneOf or discriminator.
+    assert "oneOf" not in schema_text
+    assert "discriminator" not in schema_text
+
+    # Both actions must remain valid standalone actions (top-level union).
+    assert "#/$defs/AddToGroupAction" in schema_text
+    assert "#/$defs/RemoveFromGroupAction" in schema_text
+    assert "AddToGroupAction" in schema["$defs"]
+    assert "RemoveFromGroupAction" in schema["$defs"]
+
+    # Both actions must be excluded from the nested batch.actions union.
+    batch_actions = schema["$defs"]["BatchAction"]["properties"][
+        "actions"
+    ]["items"]["anyOf"]
+    batch_titles = {
+        item.get("title") for item in batch_actions if item.get("title")
+    }
+    batch_refs = {
+        item.get("$ref") for item in batch_actions if item.get("$ref")
+    }
+    excluded = gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+    for action_name in ("AddToGroupAction", "RemoveFromGroupAction"):
+        assert action_name not in batch_titles
+        assert f"#/$defs/{action_name}" not in batch_refs
+        # And they must be in the exclusion set.
+        assert action_name in excluded
+
+    # MoveChildAction is available in the nested batch via $ref
+    # (batch items use $ref, not title, so batch_titles is empty).
+    # Check batch_refs for the $defs reference.
+    assert "#/$defs/MoveChildAction" in batch_refs
+    assert "MoveChildAction" not in excluded
+    assert "MoveChildAction" not in gemini_provider.GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS
+
+
+def test_gemini_excludes_overlapping_signal_actions_from_nested_batch():
+    """Regression guard for the same Gemini 400 INVALID_ARGUMENT
+    overlap class as the group actions: connect_signal and
+    disconnect_signal present structurally identical branches
+    (same required fields; connect adds optional deferred), so both
+    are excluded from the provider-only nested batch union while
+    remaining valid standalone actions in the top-level union.
+    """
+    from agent.schemas import AgentDecision
+    from pydantic import TypeAdapter
+
+    raw_schema = TypeAdapter(AgentDecision).json_schema()
+    schema = gemini_provider.make_gemini_schema_compatible(raw_schema)
+    schema_text = json.dumps(schema)
+
+    assert "oneOf" not in schema_text
+    assert "discriminator" not in schema_text
+
+    # Both actions remain valid standalone actions (top-level union).
+    assert "#/$defs/ConnectSignalAction" in schema_text
+    assert "#/$defs/DisconnectSignalAction" in schema_text
+    assert "ConnectSignalAction" in schema["$defs"]
+    assert "DisconnectSignalAction" in schema["$defs"]
+
+    # Both actions are excluded from the nested batch.actions union.
+    batch_actions = schema["$defs"]["BatchAction"]["properties"][
+        "actions"
+    ]["items"]["anyOf"]
+    batch_refs = {
+        item.get("$ref") for item in batch_actions if item.get("$ref")
+    }
+    excluded = gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+    for action_name in ("ConnectSignalAction", "DisconnectSignalAction"):
+        assert f"#/$defs/{action_name}" not in batch_refs
+        assert action_name in excluded
+
+    # The read-only connection inspector has no overlapping pair
+    # beyond the existing {node_path}-only actions, so it stays in
+    # the nested batch union like list_node_signals.
+    assert "#/$defs/ListConnectionsAction" in batch_refs
+    assert "ListConnectionsAction" not in excluded
+
+
+def test_gemini_schema_accepts_script_actions_without_exclusions():
+    """Rule 12 analysis record for the script tools batch.
+
+    Structural analysis of the five new branches:
+    - CreateScriptAction {script_path, content}: unique required set
+      (a superset of find_nodes_by_script, a tolerated subset
+      relation like delete_node under other mutations).
+    - AttachScriptAction {node_path, script_path}: unique required
+      set.
+    - DetachScriptAction {node_path}: identical required set to the
+      existing delete_node branch (tolerated precedent, live
+      validated since Tool Expansion V2).
+    - GetScriptContentAction {script_path}: identical required set to
+      find_nodes_by_script (read-only identical pair, tolerated
+      precedent like the {node_path}-only family).
+    - ListScriptDiagnosticsAction {script_path}: same as above.
+
+    Therefore NO nested-batch exclusions are added; the live Gemini
+    smoke test is the authoritative gate (Rule 12), with the
+    two-tier exclusion pattern as the documented fallback.
+    """
+    from agent.schemas import AgentDecision
+    from pydantic import TypeAdapter
+
+    raw_schema = TypeAdapter(AgentDecision).json_schema()
+    schema = gemini_provider.make_gemini_schema_compatible(raw_schema)
+    schema_text = json.dumps(schema)
+
+    assert "oneOf" not in schema_text
+    assert "discriminator" not in schema_text
+
+    script_actions = [
+        "CreateScriptAction",
+        "AttachScriptAction",
+        "DetachScriptAction",
+        "GetScriptContentAction",
+        "ListScriptDiagnosticsAction",
+    ]
+
+    # All five remain valid standalone actions (top-level union).
+    for action_name in script_actions:
+        assert f"#/$defs/{action_name}" in schema_text
+        assert action_name in schema["$defs"]
+
+    # All five remain in the nested batch.actions union (no
+    # exclusions were added for this batch).
+    batch_actions = schema["$defs"]["BatchAction"]["properties"][
+        "actions"
+    ]["items"]["anyOf"]
+    batch_refs = {
+        item.get("$ref") for item in batch_actions if item.get("$ref")
+    }
+    for action_name in script_actions:
+        assert f"#/$defs/{action_name}" in batch_refs
+        assert action_name not in gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+
+
 def test_gemini_retries_transient_errors_without_live_sdk(monkeypatch):
     transient = RuntimeError("transient")
     generate_content = Mock(

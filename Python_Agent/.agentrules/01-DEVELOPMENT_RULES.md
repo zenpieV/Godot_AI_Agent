@@ -269,9 +269,14 @@ normalization.
 
 The known failure mode is:
 
-1. Pydantic emits `oneOf`, `$ref`, and discriminator metadata.
-2. The Gemini adapter removes the discriminator and converts `oneOf` to
-   `anyOf`.
+1. Pydantic emits `oneOf`, `$ref`, `discriminator`, and numeric array/range
+   constraint keywords (`minimum`, `maximum`, `minItems`, `maxItems`).
+2. The Gemini adapter alone must keep the outgoing schema compatible: apart from the
+   `result_mode` structural-uniqueness workaround, it removes `discriminator`,
+   `minimum`, `maximum`, `minItems`, and `maxItems`, and converts `oneOf` to `anyOf`.
+   Because the output keys use camelCase (`anyOf`/`propertyOrdering`), the Google GenAI
+   SDK's own `types.Schema`/`convert_to_dict` path translates them (`anyOf` to `any_of`,
+   `propertyOrdering` to `property_ordering`) on the wire; this is normal.
 3. Structurally overlapping action branches, especially branches with the
 	same optional fields or several no-parameter actions, cause Gemini to
 	reject the entire request with `400 INVALID_ARGUMENT`.
@@ -284,10 +289,11 @@ Required workflow for every action-schema change:
    union for overlapping branches, stale `$ref` entries, `oneOf`, or
    `discriminator` keywords.
 4. Run the focused provider adapter tests.
-5. Run a real Gemini schema smoke test when credentials are available. If a
-   live call returns `400 INVALID_ARGUMENT`, isolate the changed actions by
-   removing them one at a time and as a group until the causal branch is
-   proven.
+5. **Run a real Gemini schema smoke test** when credentials are available.
+   This is mandatory, not optional — see "Why Live Testing Is Required"
+   below. If a live call returns `400 INVALID_ARGUMENT`, isolate the
+   changed actions by removing them one at a time and as a group until the
+   causal branch is proven.
 
 The fix must remain provider-only. Preserve the public Pydantic action
 schemas, Python registry dispatch, batch validation, and Godot tool
@@ -301,12 +307,69 @@ Before finalizing, verify at minimum:
 ```text
 Python provider adapter tests pass
 Full Python suite passes
-Normalized Gemini schema contains no oneOf/discriminator
+Normalized Gemini schema contains no oneOf/discriminator/minimum/maximum/minItems/maxItems
 Changed actions are present where intended
 No unintended branches remain in nested batch unions
+Live Gemini smoke test passes (when credentials available)
 ```
 
 Do not spread provider-specific implementation details throughout the agent loop.
+
+### Why Live Testing Is Required (Lessons Learned)
+
+**Critical lesson from the move_child / add_to_group / rollout:** Structural
+overlap analysis alone is **insufficient** and can lead to the wrong fix.
+In one incident, two new actions (`AddToGroupAction` and
+`RemoveFromGroupAction`) had identical property/required signatures, making
+them obvious suspects for the overlapping-branch failure mode. The first
+attempt excluded only those two actions from the nested batch union — but
+the bug persisted. Live A/B isolation against the real Gemini API proved
+that:
+
+- Removing `MoveChildAction` alone restored Gemini success.
+- Removing either group action alone did **not** restore success.
+- The overlapping branches were a **red herring**; the real cause was
+  `MoveChildAction` itself being fundamentally incompatible with Gemini's
+  top-level union validation.
+
+This means: **never conclude the root cause from structural analysis
+alone.** Always perform live A/B isolation when credentials are available.
+
+### Two-Tier Exclusion Pattern
+
+The Gemini adapter supports two levels of action exclusion, because some
+actions are incompatible with Gemini in different ways:
+
+1. **`GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS`** — Actions removed only from
+   the nested `batch.actions` union. These actions work as standalone
+   decisions but cannot appear inside a Gemini-driven batch. The existing
+   `_inline_count_nodes_refs` machinery handles this.
+
+2. **`GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS`** — Actions removed entirely from
+   Gemini's generated schema (both the top-level `anyOf` union AND their
+   `$defs` entry). Use this for actions that Gemini rejects even as a
+   standalone branch in the top-level union. The action remains fully
+   functional in the public Pydantic schema, Python validation, registry
+   dispatch, and Godot tool behavior — only Gemini's generated response
+   schema omits it.
+
+When adding a new action, start with the nested-batch exclusion only. If
+live testing still fails, escalate to top-level exclusion. Document the
+reason in the regression test.
+
+### Live A/B Isolation Procedure
+
+When a `400 INVALID_ARGUMENT` occurs after a schema change:
+
+1. Generate the full normalized schema → confirm it fails live.
+2. For each **new or changed** action, generate a variant schema with
+   that single action removed from both the top-level union and `$defs`.
+3. Test each variant live → identify which single removal restores success.
+4. If no single removal works, test removing the entire new-action group.
+5. Apply the minimal exclusion that restores success (nested-batch first,
+   then top-level if needed).
+6. Write a regression test documenting the specific action and exclusion
+   tier, so future agents understand the incompatibility.
 
 ---
 

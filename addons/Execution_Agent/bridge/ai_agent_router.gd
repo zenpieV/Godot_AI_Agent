@@ -7,12 +7,14 @@ class_name AIAgentRouter
 var node_tools: AIAgentNodeTools
 var property_tools: AIAgentPropertyTools
 var editor_tools: RefCounted
+var script_tools: AIAgentScriptTools
 
 
 func _init(
 	p_node_tools: AIAgentNodeTools,
 	p_property_tools: AIAgentPropertyTools,
-	p_editor_tools: RefCounted
+	p_editor_tools: RefCounted,
+	p_script_tools: AIAgentScriptTools
 ) -> void:
 
 	node_tools = p_node_tools
@@ -20,6 +22,8 @@ func _init(
 	property_tools = p_property_tools
 
 	editor_tools = p_editor_tools
+
+	script_tools = p_script_tools
 
 
 # ==========================================
@@ -345,6 +349,155 @@ func route_request(
 			body_text,
 			node_tools,
 			"duplicate_node_from_request"
+		)
+
+	# ======================================
+	# Route: /move_child
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/move_child"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"move_child_from_request"
+		)
+
+	# ======================================
+	# Route: /add_to_group
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/add_to_group"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"add_to_group_from_request"
+		)
+
+	# ======================================
+	# Route: /remove_from_group
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/remove_from_group"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"remove_from_group_from_request"
+		)
+
+	# ======================================
+	# Route: /list_node_connections
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/list_node_connections"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"list_node_connections_from_request"
+		)
+
+	# ======================================
+	# Route: /connect_signal
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/connect_signal"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"connect_signal_from_request"
+		)
+
+	# ======================================
+	# Route: /disconnect_signal
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/disconnect_signal"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"disconnect_signal_from_request"
+		)
+
+	# ======================================
+	# Routes: script tools
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/create_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"create_script_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/attach_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"attach_script_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/detach_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"detach_script_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_script_content"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"get_script_content_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/list_script_diagnostics"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"list_script_diagnostics_from_request"
 		)
 
 	# ======================================

@@ -1,6 +1,6 @@
+import logging
 import os
 import time
-import logging
 from copy import deepcopy
 
 from dotenv import load_dotenv
@@ -57,7 +57,13 @@ GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS = {
     "GetEditorStateAction",
     "ListScenesInProjectAction",
     "GetUndoHistorySummaryAction",
+    "AddToGroupAction",
+    "RemoveFromGroupAction",
+    "ConnectSignalAction",
+    "DisconnectSignalAction",
 }
+
+GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS = set()
 
 
 def _is_transient_gemini_error(
@@ -127,8 +133,11 @@ def make_gemini_schema_compatible(
     Convert a Pydantic-generated JSON schema into a
     form accepted by Gemini's response_schema support.
 
-    Gemini's SDK does not accept the JSON Schema
-    keywords 'oneOf' or 'discriminator'.
+    The provider-bound schema is normalized by recursively
+    removing JSON-schema constraint keywords that the Gemini
+    provider rejects in this environment (discriminator,
+    minimum, maximum, minItems, maxItems), while host-side
+    Pydantic validation remains intact.
 
     Pydantic discriminated unions commonly generate:
 
@@ -149,14 +158,14 @@ def make_gemini_schema_compatible(
 
         for key, item in value.items():
 
-            # Gemini SDK rejects discriminator.
-            if key == "discriminator":
+            # Recursively remove provider-rejected constraint
+            # keywords observed in this environment.
+            if key in ("discriminator", "minimum", "maximum", "minItems", "maxItems"):
 
                 continue
 
 
-            # Gemini SDK rejects oneOf.
-            # Convert it to anyOf.
+            # Gemini accepts anyOf-style unions; oneOf is converted.
             if key == "oneOf":
 
                 converted["anyOf"] = (
@@ -205,6 +214,15 @@ def make_gemini_schema_compatible(
                 if property_name not in required:
                     required.append(property_name)
 
+        if converted.get("title") == "MoveChildAction":
+            properties = converted.setdefault("properties", {})
+            properties["result_mode"] = {
+                "enum": ["move_child"],
+                "type": "string",
+            }
+            required = converted.setdefault("required", [])
+            if "result_mode" not in required:
+                required.append("result_mode")
 
         if "$defs" in converted:
 
@@ -223,6 +241,27 @@ def make_gemini_schema_compatible(
                     "CountNodesAction",
                     None,
                 )
+
+                for action_name in GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS:
+                    converted["$defs"].pop(action_name, None)
+
+                if "anyOf" in converted:
+                    converted["anyOf"] = [
+                        item
+                        for item in converted["anyOf"]
+                        if not (
+                            isinstance(item, dict)
+                            and (
+                                item.get("title") in
+                                GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS
+                                or item.get("$ref") in {
+                                    "#/$defs/" + name
+                                    for name in
+                                    GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS
+                                }
+                            )
+                        )
+                    ]
 
         return converted
 

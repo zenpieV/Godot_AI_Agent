@@ -237,6 +237,111 @@ class SetPropertiesAction(BaseAction):
     properties_json: str
 
 
+class MoveChildAction(BaseAction):
+
+    action: Literal["move_child"]
+
+    node_path: str
+
+    new_index: int = Field(
+        ge=0
+    )
+
+
+
+
+class AddToGroupAction(BaseAction):
+
+    action: Literal["add_to_group"]
+
+    node_path: str
+
+    group_name: str
+
+
+class RemoveFromGroupAction(BaseAction):
+
+    action: Literal["remove_from_group"]
+
+    node_path: str
+
+    group_name: str
+
+
+class ListConnectionsAction(BaseAction):
+
+    action: Literal["list_node_connections"]
+
+    node_path: str
+
+
+class ConnectSignalAction(BaseAction):
+
+    action: Literal["connect_signal"]
+
+    node_path: str
+
+    signal_name: str
+
+    target_path: str
+
+    method_name: str
+
+    deferred: Optional[bool] = None
+
+
+class DisconnectSignalAction(BaseAction):
+
+    action: Literal["disconnect_signal"]
+
+    node_path: str
+
+    signal_name: str
+
+    target_path: str
+
+    method_name: str
+
+
+class CreateScriptAction(BaseAction):
+
+    action: Literal["create_script"]
+
+    script_path: str
+
+    content: str
+
+
+class AttachScriptAction(BaseAction):
+
+    action: Literal["attach_script"]
+
+    node_path: str
+
+    script_path: str
+
+
+class DetachScriptAction(BaseAction):
+
+    action: Literal["detach_script"]
+
+    node_path: str
+
+
+class GetScriptContentAction(BaseAction):
+
+    action: Literal["get_script_content"]
+
+    script_path: str
+
+
+class ListScriptDiagnosticsAction(BaseAction):
+
+    action: Literal["list_script_diagnostics"]
+
+    script_path: str
+
+
 # ==========================================
 # Temporary prototype actions
 # ==========================================
@@ -289,6 +394,17 @@ BatchableAction = Annotated[
         ReparentNodeAction,
         DuplicateNodeAction,
         SetPropertiesAction,
+        MoveChildAction,
+        AddToGroupAction,
+        RemoveFromGroupAction,
+        ListConnectionsAction,
+        ConnectSignalAction,
+        DisconnectSignalAction,
+        CreateScriptAction,
+        AttachScriptAction,
+        DetachScriptAction,
+        GetScriptContentAction,
+        ListScriptDiagnosticsAction,
         DescribeCurrentSceneAction,
     ],
     Field(
@@ -367,6 +483,17 @@ AgentDecision = Annotated[
         ReparentNodeAction,
         DuplicateNodeAction,
         SetPropertiesAction,
+        MoveChildAction,
+        AddToGroupAction,
+        RemoveFromGroupAction,
+        ListConnectionsAction,
+        ConnectSignalAction,
+        DisconnectSignalAction,
+        CreateScriptAction,
+        AttachScriptAction,
+        DetachScriptAction,
+        GetScriptContentAction,
+        ListScriptDiagnosticsAction,
         DescribeCurrentSceneAction,
         BatchAction,
         FinalAnswerAction,
