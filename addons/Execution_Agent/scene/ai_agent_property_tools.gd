@@ -676,3 +676,583 @@ func build_property_metadata(
 		}
 
 	return metadata
+
+
+# ==========================================
+# get_property_info
+# ==========================================
+# Deep introspection for ONE property: real reflection
+# type/hint/usage from get_property_list, the current
+# value serialized JSON-safely, and the class default
+# from ClassDB. Lets the model construct valid
+# set_properties payloads instead of guessing schemas.
+
+
+func get_property_info_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"get_property_info requires "
+				+ "node_path."
+			)
+		}
+
+	if not data.has("property_name"):
+
+		return {
+			"success": false,
+			"error": (
+				"get_property_info requires "
+				+ "property_name."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	var property_name: String = (
+		str(data["property_name"]).strip_edges()
+	)
+
+	if property_name.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"get_property_info requires a "
+				+ "non-empty property_name."
+			)
+		}
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	var found: Dictionary = {}
+
+	for property_info in (
+		target_node.get_property_list()
+	):
+
+		if str(
+			property_info.get("name", "")
+		) == property_name:
+
+			found = property_info
+
+			break
+
+	if found.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"Property not found on node: "
+				+ property_name
+			)
+		}
+
+	var usage: int = int(
+		found.get("usage", 0)
+	)
+
+	var type_id: int = int(
+		found.get("type", TYPE_NIL)
+	)
+
+	var current_value = (
+		target_node.get(property_name)
+	)
+
+	var class_default: Variant = (
+		ClassDB.class_get_property_default_value(
+			target_node.get_class(),
+			property_name
+		)
+	)
+
+	return {
+		"success": true,
+		"action": "get_property_info",
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": str(target_node.name),
+		"node_type": target_node.get_class(),
+		"property_name": property_name,
+		"type": type_string(type_id),
+		"type_id": type_id,
+		"hint": int(found.get("hint", 0)),
+		"hint_string": str(
+			found.get("hint_string", "")
+		),
+		"usage": usage,
+		"editable": (
+			usage & PROPERTY_USAGE_READ_ONLY
+		) == 0,
+		"current_value": (
+			variant_serializer
+			.serialize_property_value(
+				current_value
+			)
+		),
+		"class_default": (
+			variant_serializer
+			.serialize_property_value(
+				class_default
+			)
+		),
+	}
+
+
+# ==========================================
+# Resource path handling
+# ==========================================
+# Shared strict path normalization for resource files:
+# res:// scheme (auto-prefixed), forward slashes only,
+# no directory traversal, non-empty file name. Unlike
+# scripts/scenes, any resource extension is accepted.
+
+
+func _normalize_resource_file_path(
+	raw_path,
+	action_name: String
+) -> Dictionary:
+
+	if typeof(raw_path) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires a resource path."
+			)
+		}
+
+	var resource_path: String = (
+		str(raw_path).strip_edges()
+	)
+
+	if resource_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires a non-empty "
+				+ "resource path."
+			)
+		}
+
+	if not resource_path.begins_with("res://"):
+
+		resource_path = (
+			"res://"
+			+ resource_path
+		)
+
+	if resource_path.contains("\\"):
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " resource path must use "
+				+ "forward slashes."
+			)
+		}
+
+	if resource_path.contains(".."):
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " resource path must not "
+				+ "contain directory traversal."
+			)
+		}
+
+	if resource_path.length() <= len("res://"):
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires a resource file name."
+			)
+		}
+
+	return {
+		"ok": true,
+		"resource_path": resource_path
+	}
+
+
+# ==========================================
+# assign_resource_to_property
+# ==========================================
+# Loads a res:// resource and assigns it to one property
+# as a single undoable EditorUndoRedoManager property
+# action. Refuses read-only properties and non-resource
+# values; verifies by reading the property back and
+# comparing resource paths.
+
+
+func assign_resource_to_property_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property "
+				+ "requires node_path."
+			)
+		}
+
+	if not data.has("property_name"):
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property "
+				+ "requires property_name."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	var property_name: String = (
+		str(data["property_name"]).strip_edges()
+	)
+
+	if property_name.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property "
+				+ "requires a non-empty "
+				+ "property_name."
+			)
+		}
+
+	var path_check := (
+		_normalize_resource_file_path(
+			data.get("resource_path"),
+			"assign_resource_to_property"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var resource_path: String = (
+		path_check["resource_path"]
+	)
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	var property_metadata := (
+		build_property_metadata(
+			target_node
+		)
+	)
+
+	if not property_metadata.has(property_name):
+
+		return {
+			"success": false,
+			"error": (
+				"Property not found on node: "
+				+ property_name
+			)
+		}
+
+	var metadata: Dictionary = (
+		property_metadata[property_name]
+	)
+
+	if not metadata["editable"]:
+
+		return {
+			"success": false,
+			"error": (
+				"Property is read-only: "
+				+ property_name
+			)
+		}
+
+	if not FileAccess.file_exists(resource_path):
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property: "
+				+ "resource not found: "
+				+ resource_path
+			)
+		}
+
+	var loaded: Variant = load(resource_path)
+
+	if loaded == null:
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property: "
+				+ "resource could not be loaded: "
+				+ resource_path
+			)
+		}
+
+	if not (loaded is Resource):
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property: "
+				+ "resource is not a Resource: "
+				+ resource_path
+			)
+		}
+
+	var old_value: Variant = (
+		target_node.get(property_name)
+	)
+
+	var old_resource_path: String = ""
+
+	if old_value is Resource:
+
+		old_resource_path = (
+			old_value.resource_path
+		)
+
+	# Deterministic idempotent case: the same resource is
+	# already assigned.
+
+	if old_resource_path == resource_path:
+
+		return {
+			"success": true,
+			"action": "assign_resource_to_property",
+			"message": (
+				"Resource is already assigned; no "
+				+ "change was made."
+			),
+			"node_path": (
+				scene_helpers
+				.get_relative_node_path(
+					edited_scene_root,
+					target_node
+				)
+			),
+			"node_name": str(target_node.name),
+			"property_name": property_name,
+			"resource_path": resource_path,
+			"previous_resource_path": old_resource_path,
+			"changed": false,
+			"verified_assignment": true,
+			"undoable": false
+		}
+
+	if undo_redo == null:
+
+		return {
+			"success": false,
+			"action": "assign_resource_to_property",
+			"error": (
+				"assign_resource_to_property requires "
+				+ "the plugin-owned "
+				+ "EditorUndoRedoManager, which is only "
+				+ "available inside the running Godot "
+				+ "editor."
+			)
+		}
+
+	undo_redo.create_action(
+		"AI Agent: Assign "
+		+ resource_path.get_file()
+		+ " to "
+		+ str(target_node.name)
+		+ "."
+		+ property_name
+	)
+
+	undo_redo.add_do_property(
+		target_node,
+		property_name,
+		loaded
+	)
+
+	undo_redo.add_undo_property(
+		target_node,
+		property_name,
+		old_value
+	)
+
+	undo_redo.commit_action()
+
+	# Post-mutation verification: read the real property
+	# back and compare resource paths.
+
+	var assigned: Variant = (
+		target_node.get(property_name)
+	)
+
+	var assigned_path: String = ""
+
+	if assigned is Resource:
+
+		assigned_path = (
+			assigned.resource_path
+		)
+
+	var verified: bool = (
+		assigned_path == resource_path
+	)
+
+	return {
+		"success": true,
+		"action": "assign_resource_to_property",
+		"message": (
+			"Resource assigned successfully in "
+			+ "the Godot editor."
+		),
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": str(target_node.name),
+		"property_name": property_name,
+		"resource_path": resource_path,
+		"previous_resource_path": old_resource_path,
+		"changed": true,
+		"verified_assignment": verified,
+		"undoable": true
+	}
+
+
+# ==========================================
+# get_resource_info
+# ==========================================
+# Read-only identity check for one resource file,
+# answered from the real loaded resource.
+
+
+func get_resource_info_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_resource_file_path(
+			data.get("resource_path"),
+			"get_resource_info"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var resource_path: String = (
+		path_check["resource_path"]
+	)
+
+	if not FileAccess.file_exists(resource_path):
+
+		return {
+			"success": false,
+			"error": (
+				"get_resource_info: resource not "
+				+ "found: "
+				+ resource_path
+			)
+		}
+
+	var loaded: Variant = load(resource_path)
+
+	if loaded == null:
+
+		return {
+			"success": false,
+			"error": (
+				"get_resource_info: resource could "
+				+ "not be loaded: "
+				+ resource_path
+			)
+		}
+
+	if not (loaded is Resource):
+
+		return {
+			"success": false,
+			"error": (
+				"get_resource_info: resource is "
+				+ "not a Resource: "
+				+ resource_path
+			)
+		}
+
+	var resource: Resource = loaded
+
+	return {
+		"success": true,
+		"action": "get_resource_info",
+		"resource_path": resource_path,
+		"resource_class": resource.get_class(),
+		"resource_name": resource.resource_name,
+		# Some Resource subclasses (e.g. CompressedTexture2D) do
+		# not expose local_to_scene through their property list,
+		# so read it defensively instead of via member access.
+		"local_to_scene": resource.get("local_to_scene"),
+	}

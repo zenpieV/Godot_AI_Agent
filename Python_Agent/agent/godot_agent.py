@@ -1961,7 +1961,228 @@ Required parameter:
 
 script_path
 
-22. validate_node_type
+22. edit_script
+
+Replaces the ENTIRE content of an existing GDScript file.
+The bridge parse-checks the new content BEFORE writing:
+content that does not parse is never written, so the file
+stays in its previous working state. Replacing with
+byte-identical content is a deterministic no-op success.
+This action never creates files; use create_script for
+new files.
+
+Required parameters:
+
+script_path
+content
+
+23. replace_in_script
+
+Performs a deterministic anchored edit inside an existing
+GDScript file: old_string must occur EXACTLY ONCE in the
+current content and is replaced by new_string. If
+old_string is absent but new_string is already present,
+the edit is treated as already applied (no-op success).
+Ambiguous matches are refused; never guess the current
+content - use get_script_content first. The result is
+parse-checked before writing.
+
+Required parameters:
+
+script_path
+old_string
+new_string
+
+24. get_class_documentation
+
+Use to read the structured documentation of one Godot
+class from the version-matched bundled reference: brief
+description, full description, methods, properties,
+signals, constants. Consult this BEFORE writing code
+against unfamiliar classes or members.
+
+Required parameter:
+
+class_name
+
+Optional parameter:
+
+sections
+
+25. search_documentation
+
+Use to discover classes and members when the exact name
+is unknown. Bounded case-insensitive search across class
+names, member names, and documentation text. Results are
+ranked and bounded; check total_matches and truncated.
+
+Required parameter:
+
+query
+
+Optional parameter:
+
+limit
+
+26. save_scene
+
+Saves the currently edited scene to its own file on
+disk. Requires the running editor. The result verifies
+that the file was written. Use it after completing
+requested mutations so the work survives the editor
+session.
+
+Required parameters: none
+
+27. create_scene
+
+Creates a NEW scene file with a root node of the
+requested type. Existing files are never overwritten.
+The file is created on disk but NOT opened in the
+editor; opening scenes changes the edited-scene context
+and is not part of this tool.
+
+Required parameters:
+
+scene_path (res:// path ending in .tscn)
+root_node_type
+
+28. instantiate_scene
+
+Instances an existing scene file as a child of a node in
+the currently edited scene, as one undoable action. The
+result verifies the instanced child.
+
+Required parameters:
+
+parent_path
+scene_path
+
+Optional parameter:
+
+new_name
+
+29. get_scene_dependencies
+
+Reports the external resources and sub-scenes a scene
+file depends on. The scene is loaded without being
+opened; the currently edited scene is untouched.
+
+Required parameter:
+
+scene_path
+
+30. get_scene_tree_of
+
+Serializes the node tree of any scene file in the
+project without opening it. Use for multi-scene
+reasoning; prefer get_scene_tree for the currently
+edited scene.
+
+Required parameter:
+
+scene_path
+
+31. list_open_scenes
+
+Lists the scenes currently open in the editor with the
+actively edited scene marked. Requires the running
+editor.
+
+Required parameters: none
+
+32. get_property_info
+
+Reports type, hint, usage, current value, and class
+default for ONE property of a node. Use this BEFORE
+set_properties to learn the expected value shape instead
+of guessing the property schema.
+
+Required parameters:
+
+node_path
+property_name
+
+33. get_node_children_summary
+
+Lightweight child listing for one node: name, type,
+sibling index, child count. Preferred over
+get_scene_tree for large scenes when only immediate
+children are needed.
+
+Required parameter:
+
+node_path
+
+34. assign_resource_to_property
+
+Loads a res:// resource and assigns it to one property
+of a node as a single undoable action. The bridge
+verifies the resource loads and the property exists.
+The result verifies the assignment by reading the
+property back.
+
+Required parameters:
+
+node_path
+property_name
+resource_path
+
+35. get_resource_info
+
+Reports the type and identity of a resource file (class,
+resource path, resource name) from the real loaded
+resource.
+
+Required parameter:
+
+resource_path
+
+36. list_project_files
+
+Bounded, filterable listing of project files under a
+res:// prefix, optionally restricted to extensions.
+Editor-internal directories are excluded. Check
+total_matches and truncated before assuming the list is
+exhaustive.
+
+Optional parameters:
+
+prefix
+extensions
+limit
+
+37. search_in_files
+
+Bounded case-insensitive text search across project text
+files, optionally restricted to extensions. Results
+include file path, line number, and a bounded snippet.
+Check total_matches and truncated.
+
+Required parameter:
+
+query
+
+Optional parameters:
+
+extensions
+limit
+
+38. get_global_class_list
+
+Lists the project's class_name globals with the script
+path that declares each one.
+
+Required parameters: none
+
+39. get_input_map
+
+Reports the project's configured input actions and their
+events. Read-only.
+
+Required parameters: none
+
+40. validate_node_type
 
 Use before create_node whenever you are not
 completely certain that a Godot class name is
@@ -1981,7 +2202,7 @@ Resource) or cannot be instantiated directly
 (for example CanvasItem) is reported as not
 valid for node creation.
 
-23. list_available_node_types
+41. list_available_node_types
 
 Use to discover native, instantiable Godot Node
 types before validating an exact candidate or
@@ -1999,7 +2220,7 @@ total_matches and truncated before assuming the
 list is exhaustive. Use validate_node_type on a
 chosen exact name before create_node when needed.
 
-24. get_node_class_info
+42. get_node_class_info
 
 Use to inspect one registered Godot class. The
 result includes its direct base class and whether
@@ -2010,7 +2231,7 @@ Required parameter:
 
 class_name
 
-25. list_node_signals
+43. list_node_signals
 
 Use to inspect the signals exposed by one node.
 The result includes built-in and inherited signal
@@ -2020,7 +2241,7 @@ Required parameter:
 
 node_path
 
-26. list_node_groups
+44. list_node_groups
 
 Use to inspect the groups that one node currently
 belongs to. Group membership is instance state and
@@ -2030,7 +2251,7 @@ Required parameter:
 
 node_path
 
-27. count_nodes
+45. count_nodes
 
 Use when only the number of matching nodes is
 needed. It shares find_nodes filters and returns
@@ -2043,7 +2264,7 @@ node_type
 parent_path
 name_match
 
-28. find_nodes_by_script
+46. find_nodes_by_script
 
 Use to find nodes with an exact attached script
 resource path. A missing res:// prefix is normalized.
@@ -2052,7 +2273,7 @@ Required parameter:
 
 script_path
 
-29. find_nodes_by_group
+47. find_nodes_by_group
 
 Use to find nodes with exact, case-sensitive live
 membership in one group. Zero matches is a success.
@@ -2061,7 +2282,7 @@ Required parameter:
 
 group_name
 
-30. get_project_settings
+48. get_project_settings
 
 Use to inspect project configuration from live
 ProjectSettings. Provide exact setting names and/or
@@ -2074,37 +2295,37 @@ setting_names
 prefix
 limit
 
-31. list_autoloads
+49. list_autoloads
 
 Use to list configured project autoload names and
 resource targets. It reads live ProjectSettings,
 returns deterministic ordering, and is read-only.
 
-32. get_editor_state
+50. get_editor_state
 
 Use to inspect bounded current editor state,
 including the edited scene, open scenes, selected
 nodes, and playing-scene state. It requires the
 running editor plugin and does not scrape UI text.
 
-33. list_scenes_in_project
+51. list_scenes_in_project
 
 Use to list scene resources known to the running
 editor filesystem. Results are sorted and the tool
 reports an explicit not-ready error while scanning
 or importing.
 
-34. get_undo_history_summary
+52. get_undo_history_summary
 
 Use to inspect whether editor undo or redo is
 available and to read stable action labels. It is
 read-only; never use it to perform undo or redo.
 
-35. describe_current_scene
+53. describe_current_scene
 
 Use only when visual information is necessary.
 
-36. final_answer
+54. final_answer
 
 Use only when the informational request has been
 answered or every requested operation has been
@@ -2117,7 +2338,7 @@ Required parameter:
 
 final_answer
 
-37. exit_session
+55. exit_session
 
 Use only when the entire persistent session is
 explicitly complete or genuinely unrecoverable.
@@ -2157,7 +2378,7 @@ exit_summary
 exit_summary must briefly explain why the session is
 being terminated.
 
-38. batch
+56. batch
 
 Use only when you are already confident about a
 short, strictly sequential series of KNOWN,

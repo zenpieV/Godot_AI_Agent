@@ -8,13 +8,15 @@ var node_tools: AIAgentNodeTools
 var property_tools: AIAgentPropertyTools
 var editor_tools: RefCounted
 var script_tools: AIAgentScriptTools
+var scene_file_tools: AIAgentSceneFileTools
 
 
 func _init(
 	p_node_tools: AIAgentNodeTools,
 	p_property_tools: AIAgentPropertyTools,
 	p_editor_tools: RefCounted,
-	p_script_tools: AIAgentScriptTools
+	p_script_tools: AIAgentScriptTools,
+	p_scene_file_tools: AIAgentSceneFileTools
 ) -> void:
 
 	node_tools = p_node_tools
@@ -24,6 +26,8 @@ func _init(
 	editor_tools = p_editor_tools
 
 	script_tools = p_script_tools
+
+	scene_file_tools = p_scene_file_tools
 
 
 # ==========================================
@@ -498,6 +502,194 @@ func route_request(
 			body_text,
 			script_tools,
 			"list_script_diagnostics_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/edit_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"edit_script_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/replace_in_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			script_tools,
+			"replace_in_script_from_request"
+		)
+
+	# ======================================
+	# Routes: scene file tools
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/save_scene"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"save_scene_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/create_scene"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"create_scene_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/instantiate_scene"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"instantiate_scene_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_scene_dependencies"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"get_scene_dependencies_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_scene_tree_of"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"get_scene_tree_of_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/list_open_scenes"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"list_open_scenes_from_request"
+		)
+
+	# ======================================
+	# Routes: property introspection and resources
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/get_property_info"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"get_property_info_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/assign_resource_to_property"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"assign_resource_to_property_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_resource_info"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"get_resource_info_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_node_children_summary"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"get_node_children_summary_from_request"
+		)
+
+	# ======================================
+	# Routes: project inspection
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/list_project_files"
+	):
+
+		return _handle_json_route(
+			body_text,
+			editor_tools,
+			"list_project_files_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/search_in_files"
+	):
+
+		return _handle_json_route(
+			body_text,
+			editor_tools,
+			"search_in_files_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_global_class_list"
+	):
+
+		return _handle_json_route(
+			body_text,
+			editor_tools,
+			"get_global_class_list_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_input_map"
+	):
+
+		return _handle_json_route(
+			body_text,
+			editor_tools,
+			"get_input_map_from_request"
 		)
 
 	# ======================================

@@ -61,6 +61,8 @@ GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS = {
     "RemoveFromGroupAction",
     "ConnectSignalAction",
     "DisconnectSignalAction",
+    "CreateScriptAction",
+    "EditScriptAction",
 }
 
 GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS = set()

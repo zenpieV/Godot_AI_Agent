@@ -37,6 +37,12 @@ MUTATION_ACTIONS = {
     "create_script",
     "attach_script",
     "detach_script",
+    "edit_script",
+    "replace_in_script",
+    "save_scene",
+    "create_scene",
+    "instantiate_scene",
+    "assign_resource_to_property",
 }
 
 
@@ -575,6 +581,135 @@ def test_record_from_detach_script_idempotent_verified():
     assert record.success is True
     assert record.verification == mutation.VERIFICATION_VERIFIED
     assert record.undoable is False
+
+
+def test_record_from_edit_script_verified_non_undoable():
+    """edit_script is a real, non-undoable file mutation; the
+    record carries undoable: false with the write-back claim."""
+    record = mutation.build_mutation_record(
+        SimpleNamespace(
+            action="edit_script",
+            script_path="res://scripts/probe.gd",
+            content="extends Node\n",
+        ),
+        {
+            "success": True,
+            "action": "edit_script",
+            "changed": True,
+            "parse_ok": True,
+            "verified_write": True,
+            "undoable": False,
+        },
+    )
+    assert record.success is True
+    assert record.verification == mutation.VERIFICATION_VERIFIED
+    assert record.undoable is False
+
+
+def test_record_from_replace_in_script_failed_verification():
+    """A false verified_write claim downgrades the record."""
+    record = mutation.build_mutation_record(
+        SimpleNamespace(
+            action="replace_in_script",
+            script_path="res://scripts/probe.gd",
+            old_string="10",
+            new_string="20",
+        ),
+        {
+            "success": True,
+            "action": "replace_in_script",
+            "changed": True,
+            "verified_write": False,
+            "undoable": False,
+        },
+    )
+    assert record.success is True
+    assert record.verification == mutation.VERIFICATION_FAILED
+
+
+def test_record_from_save_scene_verified_non_undoable():
+    record = mutation.build_mutation_record(
+        SimpleNamespace(action="save_scene"),
+        {
+            "success": True,
+            "action": "save_scene",
+            "changed": True,
+            "verified_write": True,
+            "undoable": False,
+        },
+    )
+    assert record.success is True
+    assert record.verification == mutation.VERIFICATION_VERIFIED
+    assert record.undoable is False
+    assert record.target == ("save_scene", ())
+
+
+def test_record_from_create_scene_failed_write():
+    record = mutation.build_mutation_record(
+        SimpleNamespace(
+            action="create_scene",
+            scene_path="res://scenes/a.tscn",
+            root_node_type="Node2D",
+        ),
+        {
+            "success": True,
+            "action": "create_scene",
+            "changed": True,
+            "verified_write": False,
+            "undoable": False,
+        },
+    )
+    assert record.success is True
+    assert record.verification == mutation.VERIFICATION_FAILED
+
+
+def test_record_from_instantiate_scene_verified_mutation():
+    record = mutation.build_mutation_record(
+        SimpleNamespace(
+            action="instantiate_scene",
+            parent_path="World",
+            scene_path="res://scenes/enemy.tscn",
+        ),
+        {
+            "success": True,
+            "action": "instantiate_scene",
+            "changed": True,
+            "verified_instance": True,
+            "undoable": True,
+        },
+    )
+    assert record.success is True
+    assert record.verification == mutation.VERIFICATION_VERIFIED
+    assert record.undoable is True
+    assert record.target == (
+        "instantiate_scene",
+        (("parent_path", "World"),),
+    )
+
+
+def test_record_from_assign_resource_verified_mutation():
+    record = mutation.build_mutation_record(
+        SimpleNamespace(
+            action="assign_resource_to_property",
+            node_path="Player",
+            property_name="texture",
+            resource_path="res://icon.svg",
+        ),
+        {
+            "success": True,
+            "action": "assign_resource_to_property",
+            "changed": True,
+            "verified_assignment": True,
+            "undoable": True,
+        },
+    )
+    assert record.success is True
+    assert record.verification == mutation.VERIFICATION_VERIFIED
+    assert record.undoable is True
+    assert record.target == (
+        "assign_resource_to_property",
+        (("node_path", "Player"),),
+    )
 
 
 # ==========================================

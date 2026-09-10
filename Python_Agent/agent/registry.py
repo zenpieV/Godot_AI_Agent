@@ -74,8 +74,28 @@ from agent.schemas import (
     DetachScriptAction,
     GetScriptContentAction,
     ListScriptDiagnosticsAction,
+    EditScriptAction,
+    ReplaceInScriptAction,
+    GetClassDocumentationAction,
+    SearchDocumentationAction,
+    SaveSceneAction,
+    CreateSceneAction,
+    InstantiateSceneAction,
+    GetSceneDependenciesAction,
+    GetSceneTreeOfAction,
+    ListOpenScenesAction,
+    GetPropertyInfoAction,
+    GetNodeChildrenSummaryAction,
+    AssignResourceToPropertyAction,
+    GetResourceInfoAction,
+    ListProjectFilesAction,
+    SearchInFilesAction,
+    GetGlobalClassListAction,
+    GetInputMapAction,
     ValidateNodeTypeAction,
 )
+
+from tools import godot_docs
 
 
 @dataclass(frozen=True)
@@ -449,6 +469,179 @@ def _execute_list_script_diagnostics(decision):
     )
 
 
+def _execute_edit_script(decision):
+    return scene_tools.edit_script(
+        script_path=(
+            decision.script_path
+        ),
+        content=(
+            decision.content
+        ),
+    )
+
+
+def _execute_replace_in_script(decision):
+    return scene_tools.replace_in_script(
+        script_path=(
+            decision.script_path
+        ),
+        old_string=(
+            decision.old_string
+        ),
+        new_string=(
+            decision.new_string
+        ),
+    )
+
+
+def _execute_get_class_documentation(decision):
+    return godot_docs.get_class_documentation(
+        class_name=(
+            decision.class_name
+        ),
+        sections=(
+            decision.sections
+        ),
+    )
+
+
+def _execute_search_documentation(decision):
+    return godot_docs.search_documentation(
+        query=(
+            decision.query
+        ),
+        limit=(
+            decision.limit
+        ),
+    )
+
+
+def _execute_save_scene(decision):
+    return scene_tools.save_scene()
+
+
+def _execute_create_scene(decision):
+    return scene_tools.create_scene(
+        scene_path=(
+            decision.scene_path
+        ),
+        root_node_type=(
+            decision.root_node_type
+        ),
+    )
+
+
+def _execute_instantiate_scene(decision):
+    return scene_tools.instantiate_scene(
+        parent_path=(
+            decision.parent_path
+        ),
+        scene_path=(
+            decision.scene_path
+        ),
+        new_name=(
+            decision.new_name
+        ),
+    )
+
+
+def _execute_get_scene_dependencies(decision):
+    return scene_tools.get_scene_dependencies(
+        scene_path=(
+            decision.scene_path
+        ),
+    )
+
+
+def _execute_get_scene_tree_of(decision):
+    return scene_tools.get_scene_tree_of(
+        scene_path=(
+            decision.scene_path
+        ),
+    )
+
+
+def _execute_list_open_scenes(decision):
+    return scene_tools.list_open_scenes()
+
+
+def _execute_get_property_info(decision):
+    return scene_tools.get_property_info(
+        node_path=(
+            decision.node_path
+        ),
+        property_name=(
+            decision.property_name
+        ),
+    )
+
+
+def _execute_get_node_children_summary(decision):
+    return scene_tools.get_node_children_summary(
+        node_path=(
+            decision.node_path
+        ),
+    )
+
+
+def _execute_assign_resource_to_property(decision):
+    return scene_tools.assign_resource_to_property(
+        node_path=(
+            decision.node_path
+        ),
+        property_name=(
+            decision.property_name
+        ),
+        resource_path=(
+            decision.resource_path
+        ),
+    )
+
+
+def _execute_get_resource_info(decision):
+    return scene_tools.get_resource_info(
+        resource_path=(
+            decision.resource_path
+        ),
+    )
+
+
+def _execute_list_project_files(decision):
+    return scene_tools.list_project_files(
+        prefix=(
+            decision.prefix
+        ),
+        extensions=(
+            decision.extensions
+        ),
+        limit=(
+            decision.limit
+        ),
+    )
+
+
+def _execute_search_in_files(decision):
+    return scene_tools.search_in_files(
+        query=(
+            decision.query
+        ),
+        extensions=(
+            decision.extensions
+        ),
+        limit=(
+            decision.limit
+        ),
+    )
+
+
+def _execute_get_global_class_list(decision):
+    return scene_tools.get_global_class_list()
+
+
+def _execute_get_input_map(decision):
+    return scene_tools.get_input_map()
+
+
 def _execute_describe_current_scene(decision):
     # Temporary prototype handler: vision is not connected yet,
     # so this returns a fixed placeholder instead of asking Godot.
@@ -758,6 +951,152 @@ _ACTION_SPECS = (
         required_fields=("script_path",),
         is_mutation=False,
         handler=_execute_list_script_diagnostics,
+    ),
+    ActionSpec(
+        name="edit_script",
+        schema=EditScriptAction,
+        required_fields=(
+            "script_path",
+            "content",
+        ),
+        is_mutation=True,
+        handler=_execute_edit_script,
+    ),
+    ActionSpec(
+        name="replace_in_script",
+        schema=ReplaceInScriptAction,
+        required_fields=(
+            "script_path",
+            "old_string",
+            "new_string",
+        ),
+        is_mutation=True,
+        handler=_execute_replace_in_script,
+    ),
+    ActionSpec(
+        name="get_class_documentation",
+        schema=GetClassDocumentationAction,
+        required_fields=("class_name",),
+        is_mutation=False,
+        handler=_execute_get_class_documentation,
+    ),
+    ActionSpec(
+        name="search_documentation",
+        schema=SearchDocumentationAction,
+        required_fields=("query",),
+        is_mutation=False,
+        handler=_execute_search_documentation,
+    ),
+    ActionSpec(
+        name="save_scene",
+        schema=SaveSceneAction,
+        required_fields=(),
+        is_mutation=True,
+        handler=_execute_save_scene,
+    ),
+    ActionSpec(
+        name="create_scene",
+        schema=CreateSceneAction,
+        required_fields=(
+            "scene_path",
+            "root_node_type",
+        ),
+        is_mutation=True,
+        handler=_execute_create_scene,
+    ),
+    ActionSpec(
+        name="instantiate_scene",
+        schema=InstantiateSceneAction,
+        required_fields=(
+            "parent_path",
+            "scene_path",
+        ),
+        is_mutation=True,
+        handler=_execute_instantiate_scene,
+    ),
+    ActionSpec(
+        name="get_scene_dependencies",
+        schema=GetSceneDependenciesAction,
+        required_fields=("scene_path",),
+        is_mutation=False,
+        handler=_execute_get_scene_dependencies,
+    ),
+    ActionSpec(
+        name="get_scene_tree_of",
+        schema=GetSceneTreeOfAction,
+        required_fields=("scene_path",),
+        is_mutation=False,
+        handler=_execute_get_scene_tree_of,
+    ),
+    ActionSpec(
+        name="list_open_scenes",
+        schema=ListOpenScenesAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_list_open_scenes,
+    ),
+    ActionSpec(
+        name="get_property_info",
+        schema=GetPropertyInfoAction,
+        required_fields=(
+            "node_path",
+            "property_name",
+        ),
+        is_mutation=False,
+        handler=_execute_get_property_info,
+    ),
+    ActionSpec(
+        name="get_node_children_summary",
+        schema=GetNodeChildrenSummaryAction,
+        required_fields=("node_path",),
+        is_mutation=False,
+        handler=_execute_get_node_children_summary,
+    ),
+    ActionSpec(
+        name="assign_resource_to_property",
+        schema=AssignResourceToPropertyAction,
+        required_fields=(
+            "node_path",
+            "property_name",
+            "resource_path",
+        ),
+        is_mutation=True,
+        handler=_execute_assign_resource_to_property,
+    ),
+    ActionSpec(
+        name="get_resource_info",
+        schema=GetResourceInfoAction,
+        required_fields=("resource_path",),
+        is_mutation=False,
+        handler=_execute_get_resource_info,
+    ),
+    ActionSpec(
+        name="list_project_files",
+        schema=ListProjectFilesAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_list_project_files,
+    ),
+    ActionSpec(
+        name="search_in_files",
+        schema=SearchInFilesAction,
+        required_fields=("query",),
+        is_mutation=False,
+        handler=_execute_search_in_files,
+    ),
+    ActionSpec(
+        name="get_global_class_list",
+        schema=GetGlobalClassListAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_get_global_class_list,
+    ),
+    ActionSpec(
+        name="get_input_map",
+        schema=GetInputMapAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_get_input_map,
     ),
     # --- Control actions (no tool dispatch; intercepted in the
     # main loop / orchestrated by execute_batch_actions) ---

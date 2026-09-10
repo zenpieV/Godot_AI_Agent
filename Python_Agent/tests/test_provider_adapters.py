@@ -232,17 +232,102 @@ def test_gemini_schema_accepts_script_actions_without_exclusions():
         assert f"#/$defs/{action_name}" in schema_text
         assert action_name in schema["$defs"]
 
-    # All five remain in the nested batch.actions union (no
-    # exclusions were added for this batch).
+    # Updated after the three-batch expansion: edit_script turned
+    # create_script into a structurally identical pair, so BOTH are
+    # now excluded from the nested batch union (see
+    # test_gemini_excludes_script_edit_pair_from_nested_batch). The
+    # remaining four script actions stay in the nested union.
     batch_actions = schema["$defs"]["BatchAction"]["properties"][
         "actions"
     ]["items"]["anyOf"]
     batch_refs = {
         item.get("$ref") for item in batch_actions if item.get("$ref")
     }
-    for action_name in script_actions:
+    assert "CreateScriptAction" in gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+    assert "EditScriptAction" in gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+    assert "#/$defs/CreateScriptAction" not in batch_refs
+    assert "#/$defs/EditScriptAction" not in batch_refs
+    for action_name in (
+        "AttachScriptAction",
+        "DetachScriptAction",
+        "GetScriptContentAction",
+        "ListScriptDiagnosticsAction",
+    ):
         assert f"#/$defs/{action_name}" in batch_refs
         assert action_name not in gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+
+
+def test_gemini_excludes_script_edit_pair_from_nested_batch():
+    """Rule 12 analysis for the three-batch expansion: edit_script
+    is structurally identical to create_script ({script_path,
+    content} required), so both are excluded from the provider-only
+    nested batch union while remaining valid standalone actions.
+
+    All other new actions follow tolerated precedents and stay in
+    the nested batch union:
+    - no-field family: SaveSceneAction, ListOpenScenesAction,
+      GetGlobalClassListAction, GetInputMapAction
+    - {node_path} family: GetNodeChildrenSummaryAction
+    - {class_name} pair with GetNodeClassInfoAction:
+      GetClassDocumentationAction (read-only, tolerated)
+    - {node_path, property_name} pair with GetNodePropertyAction:
+      GetPropertyInfoAction (read-only, tolerated)
+    - unique required sets: ReplaceInScriptAction,
+      SearchDocumentationAction, CreateSceneAction,
+      InstantiateSceneAction, GetSceneDependenciesAction,
+      GetSceneTreeOfAction, AssignResourceToPropertyAction,
+      GetResourceInfoAction
+    """
+    from agent.schemas import AgentDecision
+    from pydantic import TypeAdapter
+
+    raw_schema = TypeAdapter(AgentDecision).json_schema()
+    schema = gemini_provider.make_gemini_schema_compatible(raw_schema)
+    schema_text = json.dumps(schema)
+
+    assert "oneOf" not in schema_text
+    assert "discriminator" not in schema_text
+
+    excluded = gemini_provider.GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS
+    for action_name in ("CreateScriptAction", "EditScriptAction"):
+        assert action_name in excluded
+
+    batch_actions = schema["$defs"]["BatchAction"]["properties"][
+        "actions"
+    ]["items"]["anyOf"]
+    batch_refs = {
+        item.get("$ref") for item in batch_actions if item.get("$ref")
+    }
+
+    for action_name in ("CreateScriptAction", "EditScriptAction"):
+        assert f"#/$defs/{action_name}" not in batch_refs
+
+    remaining = [
+        "ReplaceInScriptAction",
+        "GetClassDocumentationAction",
+        "SearchDocumentationAction",
+        "SaveSceneAction",
+        "CreateSceneAction",
+        "InstantiateSceneAction",
+        "GetSceneDependenciesAction",
+        "GetSceneTreeOfAction",
+        "ListOpenScenesAction",
+        "GetPropertyInfoAction",
+        "GetNodeChildrenSummaryAction",
+        "AssignResourceToPropertyAction",
+        "GetResourceInfoAction",
+        "ListProjectFilesAction",
+        "SearchInFilesAction",
+        "GetGlobalClassListAction",
+        "GetInputMapAction",
+    ]
+    for action_name in remaining:
+        assert f"#/$defs/{action_name}" in batch_refs
+        assert action_name not in excluded
+        assert (
+            action_name
+            not in gemini_provider.GEMINI_TOP_LEVEL_EXCLUDED_ACTIONS
+        )
 
 
 def test_gemini_retries_transient_errors_without_live_sdk(monkeypatch):

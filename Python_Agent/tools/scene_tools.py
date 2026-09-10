@@ -1002,3 +1002,382 @@ def list_script_diagnostics(
         method="POST",
         payload=payload
     )
+
+
+def edit_script(
+    script_path,
+    content
+):
+    """
+    Replace the ENTIRE content of an existing GDScript
+    file with new source.
+
+    The bridge parse-checks the new content BEFORE
+    writing: content that does not parse is never
+    written, so the file on disk stays in its previous,
+    working state. Replacing with byte-identical content
+    is a deterministic no-op success. The change is not
+    undoable through the editor's undo system; the result
+    reports undoable: false and verifies the write by
+    reading the file back.
+    """
+
+    payload = {
+        "script_path": script_path,
+        "content": content
+    }
+
+    return _request_json(
+        endpoint="/edit_script",
+        method="POST",
+        payload=payload
+    )
+
+
+def replace_in_script(
+    script_path,
+    old_string,
+    new_string
+):
+    """
+    Perform a deterministic anchored edit inside an
+    existing GDScript file: old_string must occur
+    EXACTLY ONCE in the current content and is replaced
+    by new_string.
+
+    If old_string is absent but new_string is already
+    present, the edit is treated as already applied (a
+    deterministic no-op success). Ambiguous matches are
+    refused. The result is parse-checked before writing;
+    a failed parse leaves the file untouched.
+    """
+
+    payload = {
+        "script_path": script_path,
+        "old_string": old_string,
+        "new_string": new_string
+    }
+
+    return _request_json(
+        endpoint="/replace_in_script",
+        method="POST",
+        payload=payload
+    )
+
+
+def save_scene():
+    """
+    Save the currently edited scene in the running Godot
+    editor to its own file on disk.
+
+    Requires the running editor (unavailable headless).
+    The result verifies the save by checking that the
+    scene file exists and was modified by this call.
+    """
+
+    return _request_json(
+        endpoint="/save_scene",
+        method="POST",
+        payload={}
+    )
+
+
+def create_scene(
+    scene_path,
+    root_node_type
+):
+    """
+    Create a NEW scene file with a root node of the
+    requested type. The file is created on disk but NOT
+    opened in the editor: opening a scene changes the
+    edited-scene context and is deliberately out of scope
+    for this tool.
+
+    Existing files are never overwritten. File creation
+    is not undoable; the result verifies the created
+    scene by loading it back and reporting the root node.
+    """
+
+    payload = {
+        "scene_path": scene_path,
+        "root_node_type": root_node_type
+    }
+
+    return _request_json(
+        endpoint="/create_scene",
+        method="POST",
+        payload=payload
+    )
+
+
+def instantiate_scene(
+    parent_path,
+    scene_path,
+    new_name=None
+):
+    """
+    Instance an existing scene file as a child of a node
+    in the currently edited scene, as one undoable
+    EditorUndoRedoManager action.
+
+    The parent must exist; the scene file must exist and
+    load as a PackedScene. The result verifies the
+    instanced child (its scene_file_path) after the
+    change.
+    """
+
+    payload = {
+        "parent_path": parent_path,
+        "scene_path": scene_path,
+        "new_name": new_name
+    }
+
+    return _request_json(
+        endpoint="/instantiate_scene",
+        method="POST",
+        payload=payload
+    )
+
+
+def get_scene_dependencies(
+    scene_path
+):
+    """
+    Report the external resources and sub-scenes a scene
+    file depends on, answered from the loaded PackedScene
+    state (never by parsing the file text).
+
+    The scene is loaded without being opened in the
+    editor and without touching the currently edited
+    scene.
+    """
+
+    payload = {
+        "scene_path": scene_path
+    }
+
+    return _request_json(
+        endpoint="/get_scene_dependencies",
+        method="POST",
+        payload=payload
+    )
+
+
+def get_scene_tree_of(
+    scene_path
+):
+    """
+    Serialize the node tree of any scene file in the
+    project without opening it in the editor. The result
+    uses the same node serialization as get_scene_tree,
+    scoped to the requested file.
+
+    Use this for multi-scene reasoning; the currently
+    edited scene remains untouched.
+    """
+
+    payload = {
+        "scene_path": scene_path
+    }
+
+    return _request_json(
+        endpoint="/get_scene_tree_of",
+        method="POST",
+        payload=payload
+    )
+
+
+def list_open_scenes():
+    """
+    List the scenes currently open in the running Godot
+    editor, with the actively edited scene marked.
+
+    Requires the running editor (unavailable headless).
+    """
+
+    return _request_json(
+        endpoint="/list_open_scenes",
+        method="POST",
+        payload={}
+    )
+
+
+def get_property_info(
+    node_path,
+    property_name
+):
+    """
+    Report the type, hint, usage flags, current value,
+    and class default for ONE property of a node, from
+    real reflection.
+
+    Use this before set_properties to learn the expected
+    value shape instead of guessing the property schema.
+    """
+
+    payload = {
+        "node_path": node_path,
+        "property_name": property_name
+    }
+
+    return _request_json(
+        endpoint="/get_property_info",
+        method="POST",
+        payload=payload
+    )
+
+
+def get_node_children_summary(
+    node_path
+):
+    """
+    Lightweight child listing for one node: name, type,
+    sibling index, and child count, without full tree
+    serialization.
+
+    Preferred over get_scene_tree for large scenes when
+    only the immediate children are needed.
+    """
+
+    payload = {
+        "node_path": node_path
+    }
+
+    return _request_json(
+        endpoint="/get_node_children_summary",
+        method="POST",
+        payload=payload
+    )
+
+
+def assign_resource_to_property(
+    node_path,
+    property_name,
+    resource_path
+):
+    """
+    Load a res:// resource and assign it to one property
+    of a node as a single undoable
+    EditorUndoRedoManager action.
+
+    The bridge verifies that the resource loads and that
+    the property exists before assigning, and verifies
+    the assignment by reading the property back and
+    comparing its resource path.
+    """
+
+    payload = {
+        "node_path": node_path,
+        "property_name": property_name,
+        "resource_path": resource_path
+    }
+
+    return _request_json(
+        endpoint="/assign_resource_to_property",
+        method="POST",
+        payload=payload
+    )
+
+
+def get_resource_info(
+    resource_path
+):
+    """
+    Report the type and identity of a resource file
+    (class, resource path, resource name) answered from
+    the real loaded resource.
+    """
+
+    payload = {
+        "resource_path": resource_path
+    }
+
+    return _request_json(
+        endpoint="/get_resource_info",
+        method="POST",
+        payload=payload
+    )
+
+
+def list_project_files(
+    prefix=None,
+    extensions=None,
+    limit=None
+):
+    """
+    Bounded, filterable listing of project files under a
+    res:// prefix, optionally restricted to extensions
+    (e.g. ["gd", "tscn"]). Editor-internal directories
+    (.godot, .git) are excluded.
+
+    The result reports total_matches and truncated so a
+    bounded result is never mistaken for a full listing.
+    """
+
+    payload = {
+        "prefix": prefix,
+        "extensions": extensions,
+        "limit": limit
+    }
+
+    return _request_json(
+        endpoint="/list_project_files",
+        method="POST",
+        payload=payload
+    )
+
+
+def search_in_files(
+    query,
+    extensions=None,
+    limit=None
+):
+    """
+    Bounded case-insensitive text search across project
+    text files, optionally restricted to extensions.
+
+    Scanning is bounded (file count and match count);
+    results report total_matches and truncated, and
+    include file path, line number, and a bounded line
+    snippet per match.
+    """
+
+    payload = {
+        "query": query,
+        "extensions": extensions,
+        "limit": limit
+    }
+
+    return _request_json(
+        endpoint="/search_in_files",
+        method="POST",
+        payload=payload
+    )
+
+
+def get_global_class_list():
+    """
+    List the project's class_name globals (ScriptServer
+    global class list): the class name and the script
+    path that declares it.
+    """
+
+    return _request_json(
+        endpoint="/get_global_class_list",
+        method="POST",
+        payload={}
+    )
+
+
+def get_input_map():
+    """
+    Report the project's configured input actions with
+    their event descriptions, answered from the live
+    InputMap.
+    """
+
+    return _request_json(
+        endpoint="/get_input_map",
+        method="POST",
+        payload={}
+    )

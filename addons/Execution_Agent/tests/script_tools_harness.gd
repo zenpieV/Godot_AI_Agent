@@ -296,6 +296,231 @@ func _run_shared_validation_cases() -> void:
 	# undo-capable phase below).
 
 
+func _run_file_edit_cases() -> void:
+	# File-edit cases work with and without the undo manager:
+	# edit_script and replace_in_script are file writes.
+
+	# 1. Validation: missing fields.
+	var missing_content = (
+		script_tools.edit_script_from_request(
+			{"script_path": SCRATCH_SCRIPT}
+		)
+	)
+	assert(not missing_content["success"])
+	assert(missing_content["error"].contains("requires content"))
+
+	var missing_old = (
+		script_tools.replace_in_script_from_request(
+			{"script_path": SCRATCH_SCRIPT, "new_string": "x"}
+		)
+	)
+	assert(not missing_old["success"])
+	assert(missing_old["error"].contains("requires old_string"))
+
+	# 2. edit_script: never creates files.
+	var edit_missing = (
+		script_tools.edit_script_from_request(
+			{"script_path": SCRATCH_SCRIPT, "content": VALID_CONTENT}
+		)
+	)
+	assert(not edit_missing["success"])
+	assert(edit_missing["error"].contains("script not found"))
+	assert(edit_missing["error"].contains("create_script"))
+
+	# 3. replace_in_script: missing file.
+	var replace_missing = (
+		script_tools.replace_in_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"old_string": "probe_health",
+				"new_string": "other"
+			}
+		)
+	)
+	assert(not replace_missing["success"])
+	assert(replace_missing["error"].contains("script not found"))
+
+	# Seed a script through the tool pipeline.
+	var seeded = (
+		script_tools.create_script_from_request(
+			{"script_path": SCRATCH_SCRIPT, "content": VALID_CONTENT}
+		)
+	)
+	if not FileAccess.file_exists(SCRATCH_SCRIPT):
+		# create_script is parse-gated; seed via raw write when the
+		# tool refused (e.g. content already on disk from a prior
+		# crashed run is cleaned at start).
+		_raw_write(SCRATCH_SCRIPT, VALID_CONTENT)
+
+	# 4. edit_script: byte-identical replacement is a no-op.
+	var idempotent_edit = (
+		script_tools.edit_script_from_request(
+			{"script_path": SCRATCH_SCRIPT, "content": VALID_CONTENT}
+		)
+	)
+	assert(idempotent_edit["success"])
+	assert(idempotent_edit["changed"] == false)
+	assert(idempotent_edit["verified_write"] == true)
+
+	# 5. edit_script: successful replacement with verification.
+	var new_content := (
+		"extends Node\n\nvar probe_health := 42\n"
+	)
+	var edit_result = (
+		script_tools.edit_script_from_request(
+			{"script_path": SCRATCH_SCRIPT, "content": new_content}
+		)
+	)
+	assert(edit_result["success"])
+	assert(edit_result["changed"] == true)
+	assert(edit_result["verified_write"] == true)
+	assert(edit_result["undoable"] == false)
+
+	var reread = (
+		script_tools.get_script_content_from_request(
+			{"script_path": SCRATCH_SCRIPT}
+		)
+	)
+	assert(reread["source"] == new_content)
+
+	# 6. edit_script: parse gate leaves the previous content.
+	var broken_edit = (
+		script_tools.edit_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"content": BROKEN_CONTENT
+			}
+		)
+	)
+	assert(not broken_edit["success"])
+	assert(broken_edit["error"].contains("does not parse"))
+
+	var unchanged = (
+		script_tools.get_script_content_from_request(
+			{"script_path": SCRATCH_SCRIPT}
+		)
+	)
+	assert(unchanged["source"] == new_content)
+
+	# 7. replace_in_script: ambiguous anchor refused. Seed a
+	# second occurrence of the anchor first via a valid edit.
+	var doubled = (
+		script_tools.edit_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"content": (
+					"extends Node\n\nvar probe_health := 42\n"
+					+ "# probe_health marker\n"
+				)
+			}
+		)
+	)
+	assert(doubled["success"])
+	assert(doubled["changed"] == true)
+
+	var ambiguous = (
+		script_tools.replace_in_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"old_string": "probe_health",
+				"new_string": "other"
+			}
+		)
+	)
+	assert(not ambiguous["success"])
+	assert(ambiguous["error"].contains("occurs"))
+	assert(ambiguous["error"].contains("must be unique"))
+
+	# Restore single-occurrence content for the following cases.
+	var undoubled = (
+		script_tools.edit_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"content": (
+					"extends Node\n\nvar probe_health := 42\n"
+				)
+			}
+		)
+	)
+	assert(undoubled["success"])
+
+	# 8. replace_in_script: zero occurrences with the replacement
+	# already present is an already-applied no-op.
+	var already = (
+		script_tools.replace_in_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"old_string": "nonexistent_anchor",
+				"new_string": "probe_health"
+			}
+		)
+	)
+	assert(already["success"])
+	assert(already["changed"] == false)
+
+	# 9. replace_in_script: zero occurrences, replacement absent ->
+	# structured not-found failure.
+	var not_found = (
+		script_tools.replace_in_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"old_string": "nonexistent_anchor",
+				"new_string": "other_value"
+			}
+		)
+	)
+	assert(not not_found["success"])
+	assert(not_found["error"].contains("old_string not found"))
+
+	# 10. replace_in_script: successful anchored edit (unique
+	# anchor) with parse gate and verification.
+	var replace_result = (
+		script_tools.replace_in_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"old_string": "var probe_health := 42",
+				"new_string": "var probe_health := 99"
+			}
+		)
+	)
+	assert(replace_result["success"])
+	assert(replace_result["changed"] == true)
+	assert(replace_result["parse_ok"] == true)
+	assert(replace_result["verified_write"] == true)
+
+	var replaced_read = (
+		script_tools.get_script_content_from_request(
+			{"script_path": SCRATCH_SCRIPT}
+		)
+	)
+	assert(replaced_read["source"].contains("probe_health := 99"))
+
+	# 11. replace_in_script: a replacement that would break the
+	# parse is refused and the file is untouched.
+	var broken_replace = (
+		script_tools.replace_in_script_from_request(
+			{
+				"script_path": SCRATCH_SCRIPT,
+				"old_string": "var probe_health := 99",
+				"new_string": "var probe_health := ("
+			}
+		)
+	)
+	assert(not broken_replace["success"])
+	assert(broken_replace["error"].contains("does not parse"))
+
+	var still_intact = (
+		script_tools.get_script_content_from_request(
+			{"script_path": SCRATCH_SCRIPT}
+		)
+	)
+	assert(still_intact["source"].contains("probe_health := 99"))
+
+	# 12. JSON-serializable results.
+	var serialized := JSON.stringify(replace_result)
+	assert(not serialized.is_empty())
+
+
 func _run_undo_capable_cases(undo_manager) -> void:
 	# 13. create_script: parse-gated write with verification.
 	var create_result = (
@@ -461,6 +686,11 @@ func _init() -> void:
 
 	_run_shared_validation_cases()
 
+	# File-edit tools need no undo manager: exercise them in
+	# every run. They seed their own scratch script and clean
+	# up through _cleanup().
+	_run_file_edit_cases()
+
 	# If this binary allows instantiating the editor undo
 	# manager, exercise the full create/attach/detach path,
 	# idempotent cases, diagnostics, and undo/redo through the
@@ -470,6 +700,7 @@ func _init() -> void:
 			"EditorUndoRedoManager"
 		)
 		if undo_manager != null:
+			_remove_file(SCRATCH_SCRIPT)
 			script_tools = AIAgentScriptToolsScript.new(
 				scene_helpers,
 				undo_manager

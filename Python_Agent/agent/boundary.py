@@ -42,6 +42,24 @@ _BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
     "create_script": ("script_path", "content"),
     "attach_script": ("node_path", "script_path"),
     "detach_script": ("node_path",),
+    "edit_script": ("script_path", "content"),
+    "replace_in_script": (
+        "script_path",
+        "old_string",
+        "new_string",
+    ),
+    "save_scene": (),
+    "create_scene": ("scene_path", "root_node_type"),
+    "instantiate_scene": (
+        "parent_path",
+        "scene_path",
+        "new_name",
+    ),
+    "assign_resource_to_property": (
+        "node_path",
+        "property_name",
+        "resource_path",
+    ),
 }
 
 # Fields identifying the RESOURCE being mutated (the "target"),
@@ -85,6 +103,21 @@ _MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     # any further attach on Player regardless of script).
     "attach_script": ("node_path",),
     "detach_script": ("node_path",),
+    # Script file edits: the mutated resource is the file.
+    "edit_script": ("script_path",),
+    "replace_in_script": ("script_path",),
+    # save_scene has no parameters; exact fingerprint
+    # equivalence alone is meaningful.
+    "save_scene": (),
+    # Scene file creation: the mutated resource is the file.
+    "create_scene": ("scene_path",),
+    # Instancing mutates the parent's children; a skipped
+    # instantiate blocks further instantiation into the
+    # same parent regardless of scene or name.
+    "instantiate_scene": ("parent_path",),
+    # Resource assignment mutates the node (same
+    # conservatism as set_properties).
+    "assign_resource_to_property": ("node_path",),
 }
 
 

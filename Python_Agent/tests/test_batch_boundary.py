@@ -25,6 +25,12 @@ from agent.schemas import (
     CreateScriptAction,
     AttachScriptAction,
     DetachScriptAction,
+    EditScriptAction,
+    ReplaceInScriptAction,
+    SaveSceneAction,
+    CreateSceneAction,
+    InstantiateSceneAction,
+    AssignResourceToPropertyAction,
 )
 
 
@@ -156,6 +162,58 @@ def _detach_script(node_path):
         reason="r",
         action="detach_script",
         node_path=node_path,
+    )
+
+
+def _edit_script(script_path, content):
+    return EditScriptAction(
+        reason="r",
+        action="edit_script",
+        script_path=script_path,
+        content=content,
+    )
+
+
+def _replace_in_script(script_path, old_string, new_string):
+    return ReplaceInScriptAction(
+        reason="r",
+        action="replace_in_script",
+        script_path=script_path,
+        old_string=old_string,
+        new_string=new_string,
+    )
+
+
+def _save_scene():
+    return SaveSceneAction(reason="r", action="save_scene")
+
+
+def _create_scene(scene_path, root_node_type):
+    return CreateSceneAction(
+        reason="r",
+        action="create_scene",
+        scene_path=scene_path,
+        root_node_type=root_node_type,
+    )
+
+
+def _instantiate_scene(parent_path, scene_path, new_name=None):
+    return InstantiateSceneAction(
+        reason="r",
+        action="instantiate_scene",
+        parent_path=parent_path,
+        scene_path=scene_path,
+        new_name=new_name,
+    )
+
+
+def _assign_resource(node_path, property_name, resource_path):
+    return AssignResourceToPropertyAction(
+        reason="r",
+        action="assign_resource_to_property",
+        node_path=node_path,
+        property_name=property_name,
+        resource_path=resource_path,
     )
 
 
@@ -744,6 +802,127 @@ def test_detach_script_different_node_not_blocked():
     assert is_blocked is False
 
 
+def test_edit_script_different_content_BLOCKED():
+    """Same file, different content: target is the script file."""
+    skipped = _edit_script("res://scripts/a.gd", "extends Node\n")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _edit_script("res://scripts/a.gd", "extends Node2D\n")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_edit_script_different_file_not_blocked():
+    skipped = _edit_script("res://scripts/a.gd", "extends Node\n")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _edit_script("res://scripts/b.gd", "extends Node\n")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_replace_in_script_different_replacement_BLOCKED():
+    """Same file, different anchored edit: target is the file."""
+    skipped = _replace_in_script("res://scripts/a.gd", "10", "20")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _replace_in_script("res://scripts/a.gd", "10", "30")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_replace_in_script_different_file_not_blocked():
+    skipped = _replace_in_script("res://scripts/a.gd", "10", "20")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _replace_in_script("res://scripts/b.gd", "10", "20")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_save_scene_fingerprint_matches_skipped():
+    skipped = _save_scene()
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _save_scene()
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_create_scene_different_root_type_BLOCKED():
+    """Same scene file, different root type: target is the file."""
+    skipped = _create_scene("res://scenes/a.tscn", "Node2D")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _create_scene("res://scenes/a.tscn", "Node3D")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_create_scene_different_file_not_blocked():
+    skipped = _create_scene("res://scenes/a.tscn", "Node2D")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _create_scene("res://scenes/b.tscn", "Node2D")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_instantiate_scene_different_scene_BLOCKED():
+    """Same parent, different scene: target is the parent."""
+    skipped = _instantiate_scene("World", "res://scenes/a.tscn")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _instantiate_scene("World", "res://scenes/b.tscn")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_instantiate_scene_different_parent_not_blocked():
+    skipped = _instantiate_scene("World", "res://scenes/a.tscn")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _instantiate_scene("Level", "res://scenes/a.tscn")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_assign_resource_different_resource_BLOCKED():
+    """Same node (target is the node), different resource."""
+    skipped = _assign_resource("Player", "texture", "res://a.png")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _assign_resource("Player", "texture", "res://b.png")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_assign_resource_different_node_not_blocked():
+    skipped = _assign_resource("Player", "texture", "res://a.png")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _assign_resource("Enemy", "texture", "res://a.png")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_new_mutation_target_extraction():
+    """Target extraction for the six new mutations."""
+    assert extract_mutation_target(
+        _edit_script("res://s.gd", "x")
+    ) == ("edit_script", (("script_path", "res://s.gd"),))
+
+    assert extract_mutation_target(
+        _replace_in_script("res://s.gd", "a", "b")
+    ) == ("replace_in_script", (("script_path", "res://s.gd"),))
+
+    assert extract_mutation_target(_save_scene()) == (
+        "save_scene",
+        (),
+    )
+
+    assert extract_mutation_target(
+        _create_scene("res://a.tscn", "Node2D")
+    ) == ("create_scene", (("scene_path", "res://a.tscn"),))
+
+    assert extract_mutation_target(
+        _instantiate_scene("World", "res://a.tscn")
+    ) == ("instantiate_scene", (("parent_path", "World"),))
+
+    assert extract_mutation_target(
+        _assign_resource("Player", "texture", "res://a.png")
+    ) == ("assign_resource_to_property", (("node_path", "Player"),))
+
+
 def test_script_mutation_target_extraction():
     """Script mutation targets: the file for create_script, the
     node's attachment for attach/detach."""
@@ -811,6 +990,18 @@ if __name__ == "__main__":
     test_detach_script_fingerprint_matches_skipped()
     test_detach_script_different_node_not_blocked()
     test_script_mutation_target_extraction()
+    test_edit_script_different_content_BLOCKED()
+    test_edit_script_different_file_not_blocked()
+    test_replace_in_script_different_replacement_BLOCKED()
+    test_replace_in_script_different_file_not_blocked()
+    test_save_scene_fingerprint_matches_skipped()
+    test_create_scene_different_root_type_BLOCKED()
+    test_create_scene_different_file_not_blocked()
+    test_instantiate_scene_different_scene_BLOCKED()
+    test_instantiate_scene_different_parent_not_blocked()
+    test_assign_resource_different_resource_BLOCKED()
+    test_assign_resource_different_node_not_blocked()
+    test_new_mutation_target_extraction()
     test_add_to_group_fingerprint_matches_skipped()
     test_add_to_group_different_group_BLOCKED()
     test_add_to_group_different_node_not_blocked()

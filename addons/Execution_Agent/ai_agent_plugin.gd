@@ -8,6 +8,9 @@ const AIAgentEditorToolsScript = preload(
 const AIAgentScriptToolsScript = preload(
 	"res://addons/Execution_Agent/scene/ai_agent_script_tools.gd"
 )
+const AIAgentSceneFileToolsScript = preload(
+	"res://addons/Execution_Agent/scene/ai_agent_scene_file_tools.gd"
+)
 const AIAgentRouterScript = preload(
 	"res://addons/Execution_Agent/bridge/ai_agent_router.gd"
 )
@@ -23,6 +26,7 @@ var node_tools: AIAgentNodeTools
 var property_tools: AIAgentPropertyTools
 var editor_tools: RefCounted
 var script_tools: AIAgentScriptTools
+var scene_file_tools: AIAgentSceneFileTools
 var router: RefCounted
 var http_bridge: AIAgentHTTP
 
@@ -108,11 +112,18 @@ func initialize_modules() -> void:
 		undo_redo
 	)
 
+	scene_file_tools = AIAgentSceneFileToolsScript.new(
+		scene_helpers,
+		get_editor_interface(),
+		undo_redo
+	)
+
 	router = AIAgentRouterScript.new(
 		node_tools,
 		property_tools,
 		editor_tools,
-		script_tools
+		script_tools,
+		scene_file_tools
 	)
 
 	http_bridge = AIAgentHTTP.new(

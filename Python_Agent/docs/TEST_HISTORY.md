@@ -2191,3 +2191,189 @@ content round-trip verified). The agent can now produce
 parse-verified GDScript files and attach them to scene nodes;
 script modification (`edit_script`) remains Phase B, and
 behavioral verification remains future runtime-tool territory.
+
+# Three-Batch Expansion: edit_script, Scene Files, Project Introspection (2026-09-10)
+
+## Scope
+
+Eighteen tools implemented in one session (three planned batches),
+following the established architecture. Registry grows from 38 to
+56 actions (33 read-only, 20 mutations, 3 meta).
+
+**Batch 1 — script Phase B + documentation.**
+`edit_script` (whole-file replacement; parse gate BEFORE write so
+a rejected edit leaves the previous working content; never
+creates; byte-identical no-op; non-undoable, `verified_write`
+read-back), `replace_in_script` (deterministic anchored edit:
+exactly-once anchor, zero-occurrence + replacement-present =
+already-applied no-op, ambiguous anchors refused with match
+count, deletion via empty new_string; parse gate; non-undoable),
+`get_class_documentation` and `search_documentation` (Python-side
+tools reading `data/godot_docs_4.7.2.json.gz` — the project's
+first tools that never touch the bridge; data built by
+`scripts/prepare_godot_docs.py` from the official 4.7.2-stable
+docs XML, 810 classes, 1.2 MiB gzip; rationale in
+`MODEL_KNOWLEDGE_DRIFT.md`). Shared `_gated_write_script` helper
+now backs create/edit/replace alike.
+
+**Batch 2 — scene file operations** (new Godot domain
+`ai_agent_scene_file_tools.gd`, fifth tool domain):
+`save_scene` (editor-only; verified by modification-time delta;
+unsaved-new-scene handled with structured failure),
+`create_scene` (headless-capable; ClassDB-validated root type;
+pack + ResourceSaver; never overwrites; creates parent dirs;
+deliberately does NOT open the scene; verified by load-back of
+root type+name), `instantiate_scene` (undoable add_child +
+set_owner action mirroring create_node's pattern; name fallback
+chain new_name -> instanced root name -> file name; ACTUAL name
+reported because add_child renames on conflict;
+`verified_instance` via scene_file_path), `get_scene_dependencies`
+(PackedScene state walk: sub-scenes via get_node_instance,
+resources via property values; sorted; 200-entry cap with
+`internal_omitted`), `get_scene_tree_of` (instantiates without
+entering the tree, reuses node_tools serialization via
+composition, frees immediately), `list_open_scenes` (editor-only;
+marks the edited scene).
+
+**Batch 3 — property introspection and project awareness.**
+`get_property_info` (exact property reflection: type, hint,
+hint_string, usage, editable, JSON-safe current value and ClassDB
+class default), `get_node_children_summary` (bounded 200, sorted
+index, `truncated`/`omitted`), `assign_resource_to_property`
+(undoable property action; strict res:// path rules, any resource
+extension; property-exists and editable checks; idempotent
+same-path no-op; `verified_assignment` via resource-path
+comparison), `get_resource_info` (class/name/local_to_scene —
+local_to_scene read defensively via `get()` after the live bug
+below), `list_project_files` (DirAccess walk; dot-directories
+excluded; extension filter with dot normalization; limit 1-500
+default 100; walk cap 5000 with `walk_truncated`),
+`search_in_files` (bounded scan: 500 files, bounded large-file
+region, per-line matches with bounded snippets; default
+extensions gd/tscn/tres/cfg/json/md/txt; `scanned_files`,
+`scan_cap`, conservative `truncated`), `get_global_class_list`
+(ScriptServer is NOT exposed to GDScript — confirmed via ClassDB —
+so this reads `.godot/global_script_class_cache.cfg`, the
+editor's own cache), `get_input_map` (live InputMap with
+`as_text()` events; note: inside the editor this includes
+editor-internal actions).
+
+## Rule 12 handling
+
+`EditScriptAction` {script_path, content} is structurally
+identical to `CreateScriptAction`, so both were added to
+`GEMINI_NESTED_BATCH_EXCLUDED_ACTIONS` (established pair
+exclusion). All other new actions follow tolerated live-validated
+precedents (no-field family: save/list_open/get_global_class_list/
+get_input_map; {node_path} family: get_node_children_summary;
+{class_name} pair: get_class_documentation vs get_node_class_info;
+{node_path, property_name} pair: get_property_info vs
+get_node_property; unique sets: replace_in_script,
+search_documentation, create_scene, instantiate_scene,
+get_scene_dependencies, get_scene_tree_of,
+assign_resource_to_property, get_resource_info). Documented in
+tests/test_provider_adapters.py.
+
+## Python tests
+
+Full suite: **330 passed** (+50). Added: test_registry.py (18
+dispatch cases, read-only boundary tests, boundary target
+assertions, Python-side docs dispatch test),
+test_batch_boundary.py (six new mutations:
+content/replacement/root-type/scene/resource bypass BLOCKED,
+different-file/parent not blocked, target extraction including
+save_scene's empty target), test_mutation_contract.py (canonical
+set extended; verified non-undoable records for edit/save/create;
+failed write verification; instantiate/assign verified records),
+test_provider_adapters.py (script-edit pair exclusion; full
+remaining-action batch-union presence), and NEW
+tests/test_godot_docs.py (bundle version, class entry structure,
+sections filter, unknown class/section failures, ranked search,
+bounds and input validation).
+
+## Godot headless harnesses
+
+All green (exit 0, zero assertion failures):
+
+- `script_tools_harness.gd` (extended): edit/replace validation,
+  never-creates contract, byte-identical no-op, parse-gate
+  leaves-file-unchanged proof via read-back, ambiguous anchor
+  refusal, already-applied no-op, successful anchored edit,
+  replacement-that-would-not-parse refused.
+- `scene_file_tools_harness.gd` (new): path discipline, root type
+  validation (unknown class, non-instantiable CanvasItem),
+  create/load-back verification, overwrite refusal, dependency
+  structure, tree-of, editor-only tools unavailable headless,
+  instantiate validation + undo/redo in the undo-capable phase;
+  self-cleaning.
+- `property_tools_harness.gd` (new): property info reflection,
+  unknown property, resource assignment validation (missing,
+  traversal, unknown property), unavailable headless; full
+  assign/idempotent/undo-restore cycle in the undo-capable phase
+  using res://icon.svg onto a Sprite2D texture.
+- `project_inspection_harness.gd` (new): bounded/sorted/excluded
+  listing, prefix+extension filters (dot normalization),
+  truncation flags, limit validation, content search with hit
+  verification against ai_agent_router.gd, global class list
+  including the new tool classes, input map ui_* actions.
+- `connect_disconnect_signal_harness.gd` (regression): unchanged.
+
+Harness-expectation bugs fixed during development (the tools were
+correct each time): an ambiguous-anchor case seeded with a
+single-occurrence file, a sort-order assumption about
+project.godot under the default limit, and an invalid size
+comparison across different prefix filters.
+
+## Live bridge test (headless editor with plugin, isolated instance)
+
+Throwaway copy on port 8082, destroyed afterwards. 20+ cases:
+
+| Area | Result |
+| --- | --- |
+| edit_script / replace_in_script (create -> edit -> replace -> already-applied no-op -> read-back) | all verified_write true; final source confirmed |
+| create_scene | success, root name/type verified by load-back |
+| instantiate_scene under Player | success, `verified_instance: true`, actual name reported |
+| get_scene_dependencies on game_scene | node_count 7, reports `res://godot_bridge.gd` as script resource |
+| get_scene_tree_of on SAVED game_scene after save_scene | shows the instanced child — end-to-end persistence PROOF |
+| save_scene | verified_write true |
+| list_open_scenes | edited_scene marked |
+| get_property_info (Sprite2D.texture) | type Object, hint_string "Texture2D", editable, class_default — exactly the assignment guidance |
+| assign_resource_to_property (icon.svg -> texture) | verified_assignment true, undoable |
+| attach probe script onto the instanced scene root | verified, undoable |
+| list_project_files / search_in_files / get_global_class_list (9 classes incl. new tools) / get_input_map | all structured and bounded |
+
+### Bugs found by live validation (fixed and re-verified)
+
+1. `get_resource_info` crashed with "Invalid access to property or
+   key 'local_to_scene' on CompressedTexture2D": some Resource
+   subclasses do not expose `local_to_scene` through their
+   property list, and typed member access fails at runtime. Fixed
+   by defensive `resource.get("local_to_scene")` (null when
+   absent).
+2. `search_in_files limit: 3` was rejected: JSON request bodies
+   decode integral numbers as floats in GDScript, so the strict
+   `typeof != TYPE_INT` check failed. `_validate_result_limit` now
+   accepts int and float and coerces via `int()`.
+
+## Live Gemini schema smoke test (Rule 12)
+
+Live `gemini-3.1-flash-lite` with the full 56-action schema after
+normalization. Five scenarios, zero 400s: replace_in_script
+(exact anchor extraction), get_class_documentation (sections
+filter respected), save_scene, assign_resource_to_property (all
+fields correct), and batch generation with the new exclusions
+(no create_script/edit_script items inside batches). One
+scenario initially returned an unexpected (but schema-valid)
+decision shape and passed on re-run with a clearer request —
+noted as normal model variance, not a schema problem.
+
+## Status
+
+Confirmed working. Python: 330 passed. All five headless
+harnesses pass. Live bridge: all cases matched the documented
+contract, including the create -> instantiate -> attach -> save
+-> verify-on-disk persistence chain. Live Gemini smoke: zero 400s.
+Remaining known gaps: `open_scene` deferred (edited-scene context
+invalidation), `create_resource` deferred (design), vision
+(describe_current_scene) and runtime/playtest tools remain future
+work per FUTURE_TOOLS.md.

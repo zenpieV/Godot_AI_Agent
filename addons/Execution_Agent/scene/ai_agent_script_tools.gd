@@ -234,6 +234,112 @@ func _count_lines(source: String) -> int:
 # ==========================================
 
 
+func _gated_write_script(
+	script_path: String,
+	content: String
+) -> Dictionary:
+	# Shared parse-gated write used by create_script,
+	# edit_script, and replace_in_script: the content is
+	# parse-checked BEFORE anything is written, so an
+	# unparseable result never reaches the disk. The write
+	# is verified by reading the file back.
+	#
+	# Returns {"ok": true, "verified_write": bool,
+	# "line_count": int} or {"ok": false, "error": ...}.
+
+	# Parse gate: unparseable content is never written,
+	# so the agent cannot leave a broken script file
+	# behind.
+
+	var parse_result := _parse_check(content)
+
+	if not parse_result["ok"]:
+
+		return {
+			"ok": false,
+			"error": (
+				"content does not parse ("
+				+ parse_result["error"]
+				+ "). Nothing was written to disk."
+			)
+		}
+
+	# Create missing parent directories so a script can be
+	# placed into a not-yet-existing project folder (mirrors
+	# what the editor's script-creation workflow produces).
+
+	var target_dir: String = script_path.get_base_dir()
+
+	var needs_dir: bool = (
+		target_dir.length() > len("res://")
+		and not DirAccess.dir_exists_absolute(target_dir)
+	)
+
+	if needs_dir:
+
+		var mkdir_error := (
+			DirAccess.make_dir_recursive_absolute(
+				target_dir
+			)
+		)
+
+		if mkdir_error != OK:
+
+			return {
+				"ok": false,
+				"error": (
+					"could not create directory "
+					+ target_dir
+					+ ". Error: "
+					+ error_string(mkdir_error)
+				)
+			}
+
+	var file := FileAccess.open(
+		script_path,
+		FileAccess.WRITE
+	)
+
+	if file == null:
+
+		return {
+			"ok": false,
+			"error": (
+				"could not open "
+				+ script_path + " for writing. "
+				+ "Error: "
+				+ error_string(
+					FileAccess.get_open_error()
+				)
+			)
+		}
+
+	file.store_string(content)
+
+	file.close()
+
+	# Post-write verification: read the file back and
+	# compare against the requested content.
+
+	var verify_result := (
+		_read_script_file(
+			script_path,
+			"script write"
+		)
+	)
+
+	var verified_write: bool = (
+		verify_result.get("ok", false)
+		and verify_result["source"] == content
+	)
+
+	return {
+		"ok": true,
+		"verified_write": verified_write,
+		"line_count": _count_lines(content)
+	}
+
+
 func create_script_from_request(
 	data: Dictionary
 ) -> Dictionary:
@@ -300,93 +406,22 @@ func create_script_from_request(
 			)
 		}
 
-	# Parse gate: unparseable content is never written,
-	# so the agent cannot create an unfixable broken
-	# script file.
-
-	var parse_result := _parse_check(content)
-
-	if not parse_result["ok"]:
-
-		return {
-			"success": false,
-			"error": (
-				"create_script: content does not "
-				+ "parse ("
-				+ parse_result["error"]
-				+ "). Nothing was written to disk."
-			)
-		}
-
-	# Create missing parent directories so a script can be
-	# placed into a not-yet-existing project folder (mirrors
-	# what the editor's script-creation workflow produces).
-
-	var target_dir: String = script_path.get_base_dir()
-
-	var needs_dir: bool = (
-		target_dir.length() > len("res://")
-		and not DirAccess.dir_exists_absolute(target_dir)
-	)
-
-	if needs_dir:
-
-		var mkdir_error := (
-			DirAccess.make_dir_recursive_absolute(
-				target_dir
-			)
-		)
-
-		if mkdir_error != OK:
-
-			return {
-				"success": false,
-				"error": (
-					"create_script: could not create "
-					+ "directory "
-					+ target_dir
-					+ ". Error: "
-					+ error_string(mkdir_error)
-				)
-			}
-
-	var file := FileAccess.open(
-		script_path,
-		FileAccess.WRITE
-	)
-
-	if file == null:
-
-		return {
-			"success": false,
-			"error": (
-				"create_script: could not open "
-				+ script_path + " for writing. "
-				+ "Error: "
-				+ error_string(
-					FileAccess.get_open_error()
-				)
-			)
-		}
-
-	file.store_string(content)
-
-	file.close()
-
-	# Post-write verification: read the file back and
-	# compare against the requested content.
-
-	var verify_result := (
-		_read_script_file(
+	var write_result := (
+		_gated_write_script(
 			script_path,
-			"create_script"
+			content
 		)
 	)
 
-	var verified_write: bool = (
-		verify_result.get("ok", false)
-		and verify_result["source"] == content
-	)
+	if not write_result["ok"]:
+
+		return {
+			"success": false,
+			"error": (
+				"create_script: "
+				+ write_result["error"]
+			)
+		}
 
 	return {
 		"success": true,
@@ -396,10 +431,356 @@ func create_script_from_request(
 			+ "project."
 		),
 		"script_path": script_path,
-		"line_count": _count_lines(content),
+		"line_count": write_result["line_count"],
 		"parse_ok": true,
 		"changed": true,
-		"verified_write": verified_write,
+		"verified_write": write_result["verified_write"],
+		"undoable": false
+	}
+
+
+# ==========================================
+# edit_script
+# ==========================================
+# Whole-file replacement of an existing script. The
+# parse gate means a rejected edit leaves the previous,
+# working content on disk; a successful edit is verified
+# by reading the file back. Not undoable: the file
+# system has no editor undo history.
+
+
+func edit_script_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_script_path(
+			data.get("script_path"),
+			"edit_script"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var script_path: String = (
+		path_check["script_path"]
+	)
+
+	if not data.has("content"):
+
+		return {
+			"success": false,
+			"error": (
+				"edit_script requires content."
+			)
+		}
+
+	if not data_has_string(data["content"]):
+
+		return {
+			"success": false,
+			"error": (
+				"edit_script content must be "
+				+ "a string."
+			)
+		}
+
+	var content: String = data["content"]
+
+	if content.strip_edges().is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"edit_script requires non-empty "
+				+ "content."
+			)
+		}
+
+	# edit_script replaces; it never creates.
+
+	if not FileAccess.file_exists(script_path):
+
+		return {
+			"success": false,
+			"error": (
+				"edit_script: script not found: "
+				+ script_path
+				+ ". Use create_script for new "
+				+ "files."
+			)
+		}
+
+	var read_result := (
+		_read_script_file(
+			script_path,
+			"edit_script"
+		)
+	)
+
+	if not read_result.get("ok", false):
+		return read_result
+
+	# Deterministic idempotent case: byte-identical
+	# replacement.
+
+	if read_result["source"] == content:
+
+		return {
+			"success": true,
+			"action": "edit_script",
+			"message": (
+				"Content is already identical; no "
+				+ "change was made."
+			),
+			"script_path": script_path,
+			"line_count": _count_lines(content),
+			"parse_ok": true,
+			"changed": false,
+			"verified_write": true,
+			"undoable": false
+		}
+
+	var write_result := (
+		_gated_write_script(
+			script_path,
+			content
+		)
+	)
+
+	if not write_result["ok"]:
+
+		return {
+			"success": false,
+			"error": (
+				"edit_script: "
+				+ write_result["error"]
+			)
+		}
+
+	return {
+		"success": true,
+		"action": "edit_script",
+		"message": (
+			"Script content replaced successfully."
+		),
+		"script_path": script_path,
+		"line_count": write_result["line_count"],
+		"parse_ok": true,
+		"changed": true,
+		"verified_write": write_result["verified_write"],
+		"undoable": false
+	}
+
+
+# ==========================================
+# replace_in_script
+# ==========================================
+# Deterministic anchored edit: the old_string must occur
+# exactly once in the current content. Zero occurrences
+# with the new_string already present means the edit was
+# already applied (idempotent no-op); zero occurrences
+# otherwise is a structured failure. Ambiguous (multiple)
+# matches are refused, never fuzzy-resolved.
+
+
+func replace_in_script_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_script_path(
+			data.get("script_path"),
+			"replace_in_script"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var script_path: String = (
+		path_check["script_path"]
+	)
+
+	if not data.has("old_string"):
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script requires "
+				+ "old_string."
+			)
+		}
+
+	var old_string_is_invalid: bool = (
+		not data_has_string(data["old_string"])
+		or str(data["old_string"]).is_empty()
+	)
+
+	if old_string_is_invalid:
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script requires a "
+				+ "non-empty old_string."
+			)
+		}
+
+	if not data.has("new_string"):
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script requires "
+				+ "new_string."
+			)
+		}
+
+	if not data_has_string(data["new_string"]):
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script new_string must "
+				+ "be a string."
+			)
+		}
+
+	if not FileAccess.file_exists(script_path):
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script: script not "
+				+ "found: "
+				+ script_path
+			)
+		}
+
+	var read_result := (
+		_read_script_file(
+			script_path,
+			"replace_in_script"
+		)
+	)
+
+	if not read_result.get("ok", false):
+		return read_result
+
+	var current: String = read_result["source"]
+
+	var old_string: String = data["old_string"]
+
+	var new_string: String = data["new_string"]
+
+	var occurrence_count: int = current.count(
+		old_string
+	)
+
+	# Deterministic idempotent case: the anchor is gone
+	# and the replacement is already in place.
+
+	if occurrence_count == 0:
+
+		var already_applied: bool = (
+			not new_string.is_empty()
+			and current.contains(new_string)
+		)
+
+		if already_applied:
+
+			return {
+				"success": true,
+				"action": "replace_in_script",
+				"message": (
+					"Replacement already applied; "
+					+ "no change was made."
+				),
+				"script_path": script_path,
+				"changed": false,
+				"verified_write": true,
+				"undoable": false
+			}
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script: old_string not "
+				+ "found in "
+				+ script_path
+				+ ". Use get_script_content to "
+				+ "read the current source."
+			)
+		}
+
+	# Ambiguous anchors are refused, never fuzzy-resolved.
+
+	if occurrence_count > 1:
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script: old_string "
+				+ "occurs "
+				+ str(occurrence_count)
+				+ " times in "
+				+ script_path
+				+ ". The anchor must be unique; "
+				+ "use a longer anchor."
+			)
+		}
+
+	var new_content: String = current.replace(
+		old_string,
+		new_string
+	)
+
+	if new_content == current:
+
+		return {
+			"success": true,
+			"action": "replace_in_script",
+			"message": (
+				"Replacement is identical to the "
+				+ "current content; no change was "
+				+ "made."
+			),
+			"script_path": script_path,
+			"changed": false,
+			"verified_write": true,
+			"undoable": false
+		}
+
+	var write_result := (
+		_gated_write_script(
+			script_path,
+			new_content
+		)
+	)
+
+	if not write_result["ok"]:
+
+		return {
+			"success": false,
+			"error": (
+				"replace_in_script: "
+				+ write_result["error"]
+			)
+		}
+
+	return {
+		"success": true,
+		"action": "replace_in_script",
+		"message": (
+			"Script edited successfully."
+		),
+		"script_path": script_path,
+		"line_count": write_result["line_count"],
+		"parse_ok": true,
+		"changed": true,
+		"verified_write": write_result["verified_write"],
 		"undoable": false
 	}
 

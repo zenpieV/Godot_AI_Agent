@@ -1347,6 +1347,604 @@ Read-only; works headless and in the live editor.
 ---
 
 
+# Tool: edit_script
+
+## Purpose
+
+Replaces the ENTIRE content of an existing GDScript file. The
+parse gate runs BEFORE writing: content that does not parse is
+never written, so the previous working content stays on disk.
+Byte-identical replacement is a deterministic no-op success.
+`edit_script` never creates files; `create_script` never edits.
+
+Non-undoable (file write); verified by reading the file back
+(`verified_write`).
+
+## Request
+
+```json
+{
+  "action": "edit_script",
+  "reason": "Replace the whole probe script with the fixed logic.",
+  "script_path": "res://scripts/probe.gd",
+  "content": "extends Node\n\nvar value := 20\n"
+}
+```
+
+## Validation (Godot side, in order)
+
+1. `script_path` present and normalized (same rules as
+   `create_script`); `content` present, non-empty string.
+2. The file must exist ("Use create_script for new files").
+3. Idempotent case: byte-identical content is a no-op success.
+4. Parse gate on the new content.
+
+## Success response
+
+```json
+{
+  "action": "edit_script",
+  "message": "Script content replaced successfully.",
+  "script_path": "res://scripts/probe.gd",
+  "line_count": 7,
+  "parse_ok": true,
+  "changed": true,
+  "verified_write": true,
+  "success": true,
+  "undoable": false
+}
+```
+
+## Failure response
+
+```json
+{
+  "error": "edit_script: content does not parse (Parse error). Nothing was written to disk.",
+  "success": false
+}
+```
+
+---
+
+
+# Tool: replace_in_script
+
+## Purpose
+
+Deterministic anchored edit inside an existing GDScript file:
+`old_string` must occur EXACTLY ONCE in the current content and is
+replaced by `new_string`. Zero occurrences with the replacement
+already present is an already-applied no-op; zero occurrences
+otherwise is a structured failure; multiple occurrences are
+refused ("use a longer anchor"). Never fuzzy-matched.
+
+Non-undoable; parse gate before write; `verified_write` read-back.
+
+## Request
+
+```json
+{
+  "action": "replace_in_script",
+  "reason": "Bump the probe value after diagnostics.",
+  "script_path": "res://scripts/probe.gd",
+  "old_string": "var value := 20",
+  "new_string": "var value := 30"
+}
+```
+
+`new_string` may be an empty string (deletion); `old_string` must
+be non-empty.
+
+## Success response
+
+```json
+{
+  "action": "replace_in_script",
+  "message": "Script edited successfully.",
+  "script_path": "res://scripts/probe.gd",
+  "line_count": 7,
+  "parse_ok": true,
+  "changed": true,
+  "verified_write": true,
+  "success": true,
+  "undoable": false
+}
+```
+
+Idempotent responses carry `"changed": false` with
+`"message": "Replacement already applied; no change was made."`.
+
+## Failure response
+
+```json
+{
+  "error": "replace_in_script: old_string occurs 2 times in res://scripts/probe.gd. The anchor must be unique; use a longer anchor.",
+  "success": false
+}
+```
+
+---
+
+
+# Tool: get_class_documentation
+
+## Purpose
+
+Python-side tool (never touches the bridge): returns the structured
+documentation entry for one Godot class from the bundled,
+version-pinned reference (`data/godot_docs_4.7.2.json.gz`, built by
+`scripts/prepare_godot_docs.py` from the official engine docs XML).
+Use BEFORE writing code against unfamiliar classes; see
+`MODEL_KNOWLEDGE_DRIFT.md` for the rationale.
+
+## Request
+
+```json
+{
+  "action": "get_class_documentation",
+  "reason": "Check the exact AnimationPlayer API before coding.",
+  "class_name": "AnimationPlayer",
+  "sections": ["brief", "methods"]
+}
+```
+
+- `class_name`: required.
+- `sections`: optional list drawn from `brief`, `description`,
+  `methods`, `constructors`, `properties`, `signals`, `constants`,
+  `theme_items`. Unrequested sections are absent, never fabricated.
+
+## Successful Result
+
+`success`, `class_name`, `docs_version`, `inherits` (always
+included), plus each requested section: methods carry
+`{signature, description}`, properties `{type, default,
+description}`, signals `{signature, description}`, constants
+`{value, enum?, description}`.
+
+Unknown classes return a structured failure pointing to
+`search_documentation`.
+
+---
+
+
+# Tool: search_documentation
+
+## Purpose
+
+Python-side tool: bounded, ranked, case-insensitive search across
+class names, member names, and documentation text of the bundled
+reference. Ranking: exact class name > class name substring >
+member name > description text (full-text requires queries of 4+
+characters).
+
+## Request
+
+```json
+{
+  "action": "search_documentation",
+  "reason": "Find the right class for a one-shot timer.",
+  "query": "timer",
+  "limit": 5
+}
+```
+
+- `query` required; `limit` optional (1-25, default 10).
+
+## Successful Result
+
+```json
+{
+  "action": "search_documentation",
+  "query": "timer",
+  "docs_version": "4.7.2",
+  "total_matches": 12,
+  "truncated": true,
+  "limit": 5,
+  "matches": [
+    {"kind": "class", "class_name": "Timer", "member_name": "",
+     "rank": 0, "snippet": "Counts down..."}
+  ],
+  "success": true
+}
+```
+
+Match kinds: `class`, `method`, `property`, `signal`,
+`description`.
+
+---
+
+
+# Tool: save_scene
+
+## Purpose
+
+Saves the currently edited scene to its own file on disk via the
+editor. Requires the running editor (explicit unavailable error
+headless). Persistence is what makes every other mutation survive
+the editor session.
+
+## Request
+
+`{"action": "save_scene", "reason": "Persist the completed work."}`
+- No parameters. Scenes that have never been saved (no file path)
+  return a structured failure pointing at `create_scene`.
+
+## Success response
+
+```json
+{
+  "action": "save_scene",
+  "message": "Scene saved successfully in the Godot editor.",
+  "scene_path": "res://game_scene.tscn",
+  "scene_name": "game_scene",
+  "changed": true,
+  "verified_write": true,
+  "success": true,
+  "undoable": false
+}
+```
+
+`verified_write` compares the file's modification time before and
+after the save.
+
+---
+
+
+# Tool: create_scene
+
+## Purpose
+
+Creates a NEW scene file with a root node of the requested type.
+Never overwrites; creates missing parent directories. The file is
+created on disk but deliberately NOT opened in the editor (opening
+changes the edited-scene context and would invalidate the
+conversation's node paths).
+
+Non-undoable; verified by loading the file back and checking the
+instantiated root's type and name (the root is named after the
+scene file).
+
+## Request
+
+```json
+{
+  "action": "create_scene",
+  "reason": "The enemy needs its own scene.",
+  "scene_path": "res://scenes/enemy.tscn",
+  "root_node_type": "CharacterBody2D"
+}
+```
+
+Validation: strict `.tscn` path rules (same discipline as script
+paths), root type must exist in ClassDB and be directly
+instantiable.
+
+## Success response
+
+`success`, `scene_path`, `root_node_type`, `root_name`,
+`changed: true`, `verified_write`, `undoable: false`.
+
+---
+
+
+# Tool: instantiate_scene
+
+## Purpose
+
+Instances an existing scene file as a child of a node in the
+currently edited scene, as one undoable `EditorUndoRedoManager`
+action (add_child + set_owner; undo removes the child).
+
+## Request
+
+```json
+{
+  "action": "instantiate_scene",
+  "reason": "Place the enemy in the level.",
+  "parent_path": "Level",
+  "scene_path": "res://scenes/enemy.tscn",
+  "new_name": "Enemy1"
+}
+```
+
+- `new_name` optional; falls back to the instanced root's own
+  name, then the scene file name. `add_child()` silently renames
+  on conflicts, so the ACTUAL name is reported.
+
+## Success response
+
+```json
+{
+  "action": "instantiate_scene",
+  "message": "Scene instanced successfully in the Godot editor.",
+  "scene_path": "res://scenes/enemy.tscn",
+  "parent_path": "Level",
+  "node_path": "Level/Enemy1",
+  "node_name": "Enemy1",
+  "requested_name": "Enemy1",
+  "changed": true,
+  "verified_instance": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+`verified_instance` reads the child back and compares
+`scene_file_path` with the requested scene.
+
+---
+
+
+# Tool: get_scene_dependencies
+
+## Purpose
+
+Reports the sub-scenes and external resources a scene file depends
+on, answered from the loaded `PackedScene` state — never by
+parsing file text. The scene is loaded without being opened; the
+edited scene is untouched.
+
+## Request
+
+```json
+{
+  "action": "get_scene_dependencies",
+  "reason": "Check what the level pulls in.",
+  "scene_path": "res://game_scene.tscn"
+}
+```
+
+## Successful Result
+
+`node_count`, `sub_scenes` (list of `{scene_path, used_by_node}`),
+`resources` (list of `{resource_path, used_by}`), `total_*`
+counts, and `internal_omitted` when the bounded cap (200) is
+reached. Sorted for deterministic output.
+
+---
+
+
+# Tool: get_scene_tree_of
+
+## Purpose
+
+Serializes the node tree of any scene file without opening it,
+using the same node serialization as `get_scene_tree` scoped to
+the requested file. The scene is instantiated without entering
+the tree and freed immediately. Use for multi-scene reasoning;
+prefer `get_scene_tree` for the currently edited scene.
+
+## Request / Result
+
+Request takes `scene_path`. Result carries
+`scene_tree` (same structure as `get_scene_tree`, with the
+file's root reported as `is_root: true` and paths relative to
+it), plus `scene_path`.
+
+---
+
+
+# Tool: list_open_scenes
+
+## Purpose
+
+Lists scenes currently open in the running editor with the
+actively edited scene marked. Requires the running editor
+(explicit unavailable error headless).
+
+## Result
+
+`open_scenes` (sorted paths), `count`, `edited_scene`.
+
+---
+
+
+# Tool: get_property_info
+
+## Purpose
+
+Deep introspection for ONE property of a node: real reflection
+type/hint/usage from `get_property_list`, the current value
+serialized JSON-safely, and the class default from ClassDB. Use
+BEFORE `set_properties` to learn the expected value shape instead
+of guessing the property schema (this directly targets the
+historical malformed-parameter failure mode).
+
+## Request
+
+```json
+{
+  "action": "get_property_info",
+  "reason": "Learn the expected texture assignment shape.",
+  "node_path": "Player/Sprite2D",
+  "property_name": "texture"
+}
+```
+
+## Successful Result
+
+`type`, `type_id`, `hint`, `hint_string`, `usage`, `editable`,
+`current_value`, `class_default` (all JSON-safe), plus node
+identity fields. Unknown properties return a structured
+"Property not found" failure.
+
+---
+
+
+# Tool: get_node_children_summary
+
+## Purpose
+
+Lightweight child listing for one node: `{name, node_type, index,
+child_count}` per child, without full subtree serialization.
+Preferred over `get_scene_tree` for large scenes. Bounded at 200
+children with `truncated`/`omitted` reporting.
+
+## Request / Result
+
+Request takes `node_path`. Result: `total_children`, `truncated`,
+`omitted`, `children`, plus node identity fields.
+
+---
+
+
+# Tool: assign_resource_to_property
+
+## Purpose
+
+Loads a `res://` resource and assigns it to one property of a node
+as a single undoable `EditorUndoRedoManager` property action (undo
+restores the previous value). This is what makes `set_properties`
+useful in real scenes: textures, materials, audio, curves.
+
+## Request
+
+```json
+{
+  "action": "assign_resource_to_property",
+  "reason": "Give the sprite its texture.",
+  "node_path": "Player/Sprite2D",
+  "property_name": "texture",
+  "resource_path": "res://icon.svg"
+}
+```
+
+## Validation (Godot side, in order)
+
+1. `node_path`/`property_name`/`resource_path` present and valid
+   (resource path: `res://` auto-prefix, no traversal, no
+   backslashes; any resource extension).
+2. Node exists; property exists and is editable.
+3. Resource file exists, loads, and is a Resource.
+4. Idempotent case: the same resource path already assigned is a
+   no-op success.
+
+## Success response
+
+```json
+{
+  "action": "assign_resource_to_property",
+  "message": "Resource assigned successfully in the Godot editor.",
+  "node_path": "Player/Sprite2D",
+  "node_name": "Sprite2D",
+  "property_name": "texture",
+  "resource_path": "res://icon.svg",
+  "previous_resource_path": "",
+  "changed": true,
+  "verified_assignment": true,
+  "success": true,
+  "undoable": true
+}
+```
+
+`verified_assignment` reads the property back and compares
+resource paths.
+
+---
+
+
+# Tool: get_resource_info
+
+## Purpose
+
+Read-only identity check for one resource file answered from the
+real loaded resource: `resource_class`, `resource_name`,
+`local_to_scene` (read defensively; `null` for subclasses that do
+not expose it), and `resource_path`. Works headless.
+
+---
+
+
+# Tool: list_project_files
+
+## Purpose
+
+Bounded, filterable listing of project files under a `res://`
+prefix using plain `DirAccess` traversal, so it works headless and
+in the editor. Editor-internal directories (`.godot`, `.git`, and
+any dot-directory) are always excluded.
+
+## Request
+
+```json
+{
+  "action": "list_project_files",
+  "reason": "Find the project's scripts.",
+  "prefix": "addons/Execution_Agent/bridge",
+  "extensions": ["gd"],
+  "limit": 50
+}
+```
+
+- `prefix` optional (res:// paths below it); `extensions` optional
+  (dot-normalized, e.g. `".gd"` equals `"gd"`); `limit` optional
+  (1-500, default 100). Walks are additionally capped (5000 files)
+  with `walk_truncated` reporting.
+
+## Successful Result
+
+`files` (sorted `res://` paths), `total_matches`, `truncated`,
+`limit`, `walked_files`, `walk_truncated`.
+
+---
+
+
+# Tool: search_in_files
+
+## Purpose
+
+Bounded case-insensitive text search across project text files
+(default extensions: gd, tscn, tres, cfg, json, md, txt). Scanning
+is bounded (500 files, first bounded region of very large files);
+results carry `{file_path, line_number, snippet}` per match with
+`total_matches`, `truncated`, `scanned_files`, and `scan_cap`
+reporting. Never mistaken for exhaustive: a hit at the limit or a
+hit scan cap sets `truncated`.
+
+## Request
+
+```json
+{
+  "action": "search_in_files",
+  "reason": "Find where route_request is called.",
+  "query": "route_request",
+  "extensions": ["gd"],
+  "limit": 3
+}
+```
+
+---
+
+
+# Tool: get_global_class_list
+
+## Purpose
+
+Lists the project's `class_name` globals. `ScriptServer` is not
+exposed to GDScript, so this reads the editor's own global class
+cache (`.godot/global_script_class_cache.cfg`) — the same data the
+editor maintains — and reports `{class_name, script_path,
+base_class}` entries sorted by name. A missing cache is a
+structured failure (no globals or no editor scan yet). Works
+headless.
+
+---
+
+
+# Tool: get_input_map
+
+## Purpose
+
+Reports the project's configured input actions
+(`{action, deadzone, events}` with `InputEvent.as_text()` event
+descriptions) answered from the live InputMap, sorted by action
+name. Works headless. Note: inside the running editor the InputMap
+additionally contains editor-internal actions; a running game
+reports only project actions.
+
+---
+
+
 # Tool: reparent_node
 
 ## Purpose

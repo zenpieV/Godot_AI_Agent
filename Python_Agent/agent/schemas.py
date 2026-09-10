@@ -342,6 +342,166 @@ class ListScriptDiagnosticsAction(BaseAction):
     script_path: str
 
 
+class EditScriptAction(BaseAction):
+
+    action: Literal["edit_script"]
+
+    script_path: str
+
+    content: str
+
+
+class ReplaceInScriptAction(BaseAction):
+
+    action: Literal["replace_in_script"]
+
+    script_path: str
+
+    old_string: str
+
+    new_string: str
+
+
+class GetClassDocumentationAction(BaseAction):
+
+    action: Literal["get_class_documentation"]
+
+    class_name: str
+
+    sections: Optional[list[str]] = None
+
+
+class SearchDocumentationAction(BaseAction):
+
+    action: Literal["search_documentation"]
+
+    query: str
+
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=25,
+    )
+
+
+class SaveSceneAction(BaseAction):
+
+    action: Literal["save_scene"]
+
+
+class CreateSceneAction(BaseAction):
+
+    action: Literal["create_scene"]
+
+    scene_path: str
+
+    root_node_type: str
+
+
+class InstantiateSceneAction(BaseAction):
+
+    action: Literal["instantiate_scene"]
+
+    parent_path: str
+
+    scene_path: str
+
+    new_name: Optional[str] = None
+
+
+class GetSceneDependenciesAction(BaseAction):
+
+    action: Literal["get_scene_dependencies"]
+
+    scene_path: str
+
+
+class GetSceneTreeOfAction(BaseAction):
+
+    action: Literal["get_scene_tree_of"]
+
+    scene_path: str
+
+
+class ListOpenScenesAction(BaseAction):
+
+    action: Literal["list_open_scenes"]
+
+
+class GetPropertyInfoAction(BaseAction):
+
+    action: Literal["get_property_info"]
+
+    node_path: str
+
+    property_name: str
+
+
+class GetNodeChildrenSummaryAction(BaseAction):
+
+    action: Literal["get_node_children_summary"]
+
+    node_path: str
+
+
+class AssignResourceToPropertyAction(BaseAction):
+
+    action: Literal["assign_resource_to_property"]
+
+    node_path: str
+
+    property_name: str
+
+    resource_path: str
+
+
+class GetResourceInfoAction(BaseAction):
+
+    action: Literal["get_resource_info"]
+
+    resource_path: str
+
+
+class ListProjectFilesAction(BaseAction):
+
+    action: Literal["list_project_files"]
+
+    prefix: Optional[str] = None
+
+    extensions: Optional[list[str]] = None
+
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=500,
+    )
+
+
+class SearchInFilesAction(BaseAction):
+
+    action: Literal["search_in_files"]
+
+    query: str
+
+    extensions: Optional[list[str]] = None
+
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+    )
+
+
+class GetGlobalClassListAction(BaseAction):
+
+    action: Literal["get_global_class_list"]
+
+
+class GetInputMapAction(BaseAction):
+
+    action: Literal["get_input_map"]
+
+
 # ==========================================
 # Temporary prototype actions
 # ==========================================
@@ -405,6 +565,24 @@ BatchableAction = Annotated[
         DetachScriptAction,
         GetScriptContentAction,
         ListScriptDiagnosticsAction,
+        EditScriptAction,
+        ReplaceInScriptAction,
+        GetClassDocumentationAction,
+        SearchDocumentationAction,
+        SaveSceneAction,
+        CreateSceneAction,
+        InstantiateSceneAction,
+        GetSceneDependenciesAction,
+        GetSceneTreeOfAction,
+        ListOpenScenesAction,
+        GetPropertyInfoAction,
+        GetNodeChildrenSummaryAction,
+        AssignResourceToPropertyAction,
+        GetResourceInfoAction,
+        ListProjectFilesAction,
+        SearchInFilesAction,
+        GetGlobalClassListAction,
+        GetInputMapAction,
         DescribeCurrentSceneAction,
     ],
     Field(
@@ -494,6 +672,24 @@ AgentDecision = Annotated[
         DetachScriptAction,
         GetScriptContentAction,
         ListScriptDiagnosticsAction,
+        EditScriptAction,
+        ReplaceInScriptAction,
+        GetClassDocumentationAction,
+        SearchDocumentationAction,
+        SaveSceneAction,
+        CreateSceneAction,
+        InstantiateSceneAction,
+        GetSceneDependenciesAction,
+        GetSceneTreeOfAction,
+        ListOpenScenesAction,
+        GetPropertyInfoAction,
+        GetNodeChildrenSummaryAction,
+        AssignResourceToPropertyAction,
+        GetResourceInfoAction,
+        ListProjectFilesAction,
+        SearchInFilesAction,
+        GetGlobalClassListAction,
+        GetInputMapAction,
         DescribeCurrentSceneAction,
         BatchAction,
         FinalAnswerAction,

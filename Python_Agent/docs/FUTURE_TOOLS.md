@@ -25,12 +25,17 @@ Relationship to other documents:
 
 Compiled from `agent/registry.py`, `agent/schemas.py`, `tools/scene_tools.py`,
 and `addons/Execution_Agent/bridge/ai_agent_router.gd`. The registry defines
-**38 actions**: 21 read-only, 14 mutations, 3 meta/control.
-(Updated 2026-09-09: the signal-connection batch — `list_node_connections`,
-`connect_signal`, `disconnect_signal` — and the script tools Phase A batch —
-`create_script`, `attach_script`, `detach_script`, `get_script_content`,
-`list_script_diagnostics` — moved from Part 3 proposals into the
-implemented inventory; see `TOOL_PROTOCOL.md` for their contracts.)
+**56 actions**: 33 read-only, 20 mutations, 3 meta/control.
+(Updated 2026-09-10: implemented since the original proposal — the signal
+batch; script tools Phase A and Phase B including `edit_script`/
+`replace_in_script`; the documentation tools `get_class_documentation`/
+`search_documentation`; the scene-file batch `save_scene`/`create_scene`/
+`instantiate_scene`/`get_scene_dependencies`/`get_scene_tree_of`/
+`list_open_scenes`; and the Tier 2 introspection tools
+`get_property_info`/`get_node_children_summary`/`assign_resource_to_property`/
+`get_resource_info`/`list_project_files`/`search_in_files`/
+`get_global_class_list`/`get_input_map`. Contracts live in
+`TOOL_PROTOCOL.md`; verified records in `TEST_HISTORY.md`.)
 
 ## 1.1 Read-only inspection tools (21)
 
@@ -151,9 +156,10 @@ and live-Gemini smoke tested (Rule 12).
 
 **Status: Phase A IMPLEMENTED 2026-09-09** (`get_script_content`,
 `create_script`, `attach_script`, `detach_script`,
-`list_script_diagnostics` — see `TOOL_PROTOCOL.md` and
-`TEST_HISTORY.md`). Phase B (`edit_script`) remains open. The
-table below is retained as the original proposal record.
+`list_script_diagnostics`). **Phase B IMPLEMENTED 2026-09-10**
+(`edit_script`, `replace_in_script` — the code-repair loop is
+closed). See `TOOL_PROTOCOL.md` and `TEST_HISTORY.md`. The table
+below is retained as the original proposal record.
 
 The single highest-leverage expansion. Without scripts, the agent can
 build scaffolding but not behavior.
@@ -189,6 +195,15 @@ proposal record.
 | `connect_signal` | mutation | Connect `signal_name` on source node to a method on target node (undoable); verify via `is_connected` |
 | `disconnect_signal` | mutation | Remove a connection (undoable); idempotent no-op if absent |
 
+## Tier 1 — Scene file operations
+
+**Status: IMPLEMENTED 2026-09-10** (`save_scene`, `create_scene`,
+`instantiate_scene`, `get_scene_dependencies`,
+`get_scene_tree_of`, `list_open_scenes` — see `TOOL_PROTOCOL.md`
+and `TEST_HISTORY.md`). `open_scene` (switching the edited scene)
+remains deliberately deferred with the documented conversation
+context invalidation concern.
+
 Notes:
 
 - Requires deciding how callable targets are addressed: node path +
@@ -219,6 +234,11 @@ Notes:
 
 ## Tier 2 — Resource tools
 
+**Status: PARTIALLY IMPLEMENTED 2026-09-10** (`assign_resource_to_property`,
+`get_resource_info`). `create_resource` remains deferred (inline vs
+file-backed design); `list_resources_in_project` is covered by the
+implemented `list_project_files` with an extension filter.
+
 | Proposed tool | Kind | Purpose |
 |---|---|---|
 | `list_resources_in_project` | read | Bounded, filterable (type/prefix) listing of project resources, like `list_scenes_in_project` but for all resource types |
@@ -236,6 +256,9 @@ Notes:
 
 ## Tier 2 — Deep property introspection
 
+**Status: IMPLEMENTED 2026-09-10** (`get_property_info`,
+`get_node_children_summary`).
+
 | Proposed tool | Kind | Purpose |
 |---|---|---|
 | `get_property_info` | read | Type, hint, hint text, and default value for a property of a node class — lets the model construct valid `set_properties` payloads instead of guessing |
@@ -248,6 +271,10 @@ Notes:
   before writing the value.
 
 ## Tier 2 — Project-level awareness (ROADMAP Phase 8)
+
+**Status: IMPLEMENTED 2026-09-10** (`list_project_files`,
+`search_in_files`, `get_global_class_list`, `get_input_map`).
+`get_scene_tree_of` was implemented with the scene-file batch.
 
 | Proposed tool | Kind | Purpose |
 |---|---|---|

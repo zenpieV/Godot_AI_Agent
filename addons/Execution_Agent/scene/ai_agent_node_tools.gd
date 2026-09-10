@@ -3619,6 +3619,113 @@ func list_node_groups_from_request(
 		"groups": groups,
 	}
 
+
+# ==========================================
+# get_node_children_summary
+# ==========================================
+# Lightweight child listing for one node: name, type,
+# sibling index, and child count, without full subtree
+# serialization. Preferred over get_scene_tree for large
+# scenes when only immediate children are needed.
+
+
+func get_node_children_summary_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("node_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_children_summary requires "
+				+ "node_path."
+			)
+		}
+
+	var node_path: String = (
+		str(data["node_path"]).strip_edges()
+	)
+
+	if node_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"get_node_children_summary requires "
+				+ "a non-empty node_path (use \".\" "
+				+ "for the edited scene root)."
+			)
+		}
+
+	var node_result := (
+		scene_helpers
+		.resolve_node_or_error(
+			node_path
+		)
+	)
+
+	if not node_result["success"]:
+		return node_result
+
+	var edited_scene_root: Node = (
+		node_result["scene_root"]
+	)
+
+	var target_node: Node = (
+		node_result["node"]
+	)
+
+	const MAX_CHILDREN_SUMMARY := 200
+
+	var children: Array = []
+
+	var omitted := 0
+
+	var index := 0
+
+	for child in target_node.get_children():
+
+		if not (child is Node):
+			continue
+
+		if children.size() >= MAX_CHILDREN_SUMMARY:
+
+			omitted += 1
+
+			index += 1
+
+			continue
+
+		children.append(
+			{
+				"name": str(child.name),
+				"node_type": child.get_class(),
+				"index": index,
+				"child_count": child.get_child_count(),
+			}
+		)
+
+		index += 1
+
+	return {
+		"success": true,
+		"action": "get_node_children_summary",
+		"node_path": (
+			scene_helpers
+			.get_relative_node_path(
+				edited_scene_root,
+				target_node
+			)
+		),
+		"node_name": str(target_node.name),
+		"node_type": target_node.get_class(),
+		"total_children": index,
+		"truncated": omitted > 0,
+		"omitted": omitted,
+		"children": children,
+	}
+
 # ==========================================
 # find_nodes_by_script
 # ==========================================

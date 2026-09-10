@@ -165,6 +165,69 @@ content round-trip (the batch's new failure surface). See
 
 ---
 
+# Three-Batch Expansion: Script Phase B, Scene Files, Project Introspection (2026-09-10)
+
+Eighteen tools implemented in one session across three planned
+batches, bringing the registry to **56 actions** (33 read-only,
+20 mutations, 3 meta):
+
+**Batch 1 — script Phase B + documentation (4 tools).**
+`edit_script` (whole-file replacement, parse-gated before write,
+never creates) and `replace_in_script` (deterministic anchored
+edit: exactly-once anchor, already-applied no-op detection,
+ambiguous anchors refused) close the code-repair loop; both are
+non-undoable file mutations with `verified_write` read-back.
+`get_class_documentation` and `search_documentation` are the
+project's first Python-side tools (no bridge call): they serve the
+version-pinned bundled class reference
+(`data/godot_docs_4.7.2.json.gz`, built by
+`scripts/prepare_godot_docs.py`; rationale in
+`MODEL_KNOWLEDGE_DRIFT.md`).
+
+**Batch 2 — scene file operations (6 tools, new Godot domain
+`ai_agent_scene_file_tools.gd`).** `save_scene` (durability:
+persists the edited scene; verified by modification-time
+comparison), `create_scene` (new file, never overwrites,
+deliberately does NOT open the scene, root type validated against
+ClassDB), `instantiate_scene` (undoable instancing with
+`verified_instance` read-back), `get_scene_dependencies`
+(structured sub-scene/resource deps from PackedScene state, never
+text parsing), `get_scene_tree_of` (any scene's tree without
+opening it), `list_open_scenes` (editor-only).
+
+**Batch 3 — property introspection and project awareness (8
+tools).** `get_property_info` (type/hint/default/current for one
+property — directly targets the malformed-parameter failure
+mode), `get_node_children_summary` (bounded lightweight child
+listing), `assign_resource_to_property` (undoable resource
+assignment with path-verified read-back), `get_resource_info`,
+`list_project_files` and `search_in_files` (bounded DirAccess
+project inspection excluding `.godot`/`.git`),
+`get_global_class_list` (reads the editor's own global-class
+cache; ScriptServer is not exposed to GDScript), `get_input_map`.
+
+Rule 12: `EditScriptAction` is structurally identical to
+`CreateScriptAction`, so both are excluded from the Gemini
+provider-only nested batch union; every other new action follows
+tolerated live-validated precedents. Live smoke passed (zero 400s,
+five scenarios).
+
+Live validation found and fixed two real bugs: a crash on
+`local_to_scene` for resource subclasses that do not expose it
+(`CompressedTexture2D`), and integral JSON numbers decoding as
+floats in GDScript (strict `TYPE_INT` limit checks rejected valid
+limits; both limits now coerce). Both re-verified live.
+
+Verified by: **330-passing** Python suite (+50 tests), four green
+headless harnesses (script/scene-file/property/project-inspection,
+all self-cleaning where applicable), and a 20-case live bridge
+validation on an isolated editor instance — including end-to-end
+persistence proof: create scene → instantiate into the edited
+scene → attach script → `save_scene` → `get_scene_tree_of` on the
+saved file shows the instanced child. See `docs/TEST_HISTORY.md`.
+
+---
+
 # Recent Implementation: Hardening Slice 1
 
 A minimal hardening slice has been implemented to improve agent robustness without broad refactoring.

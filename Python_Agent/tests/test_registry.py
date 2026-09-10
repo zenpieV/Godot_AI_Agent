@@ -61,6 +61,24 @@ from agent.schemas import (
     DetachScriptAction,
     GetScriptContentAction,
     ListScriptDiagnosticsAction,
+    EditScriptAction,
+    ReplaceInScriptAction,
+    GetClassDocumentationAction,
+    SearchDocumentationAction,
+    SaveSceneAction,
+    CreateSceneAction,
+    InstantiateSceneAction,
+    GetSceneDependenciesAction,
+    GetSceneTreeOfAction,
+    ListOpenScenesAction,
+    GetPropertyInfoAction,
+    GetNodeChildrenSummaryAction,
+    AssignResourceToPropertyAction,
+    GetResourceInfoAction,
+    ListProjectFilesAction,
+    SearchInFilesAction,
+    GetGlobalClassListAction,
+    GetInputMapAction,
     ValidateNodeTypeAction,
 )
 from tools import scene_tools
@@ -107,6 +125,24 @@ EXECUTABLE_ACTIONS = {
     "detach_script",
     "get_script_content",
     "list_script_diagnostics",
+    "edit_script",
+    "replace_in_script",
+    "get_class_documentation",
+    "search_documentation",
+    "save_scene",
+    "create_scene",
+    "instantiate_scene",
+    "get_scene_dependencies",
+    "get_scene_tree_of",
+    "list_open_scenes",
+    "get_property_info",
+    "get_node_children_summary",
+    "assign_resource_to_property",
+    "get_resource_info",
+    "list_project_files",
+    "search_in_files",
+    "get_global_class_list",
+    "get_input_map",
 }
 
 MUTATION_ACTIONS = {
@@ -124,6 +160,12 @@ MUTATION_ACTIONS = {
     "create_script",
     "attach_script",
     "detach_script",
+    "edit_script",
+    "replace_in_script",
+    "save_scene",
+    "create_scene",
+    "instantiate_scene",
+    "assign_resource_to_property",
 }
 
 # The exact required-field mapping previously maintained by hand
@@ -171,6 +213,28 @@ PREVIOUS_ACTION_REQUIREMENTS = {
     "detach_script": ("node_path",),
     "get_script_content": ("script_path",),
     "list_script_diagnostics": ("script_path",),
+    "edit_script": ("script_path", "content"),
+    "replace_in_script": ("script_path", "old_string", "new_string"),
+    "get_class_documentation": ("class_name",),
+    "search_documentation": ("query",),
+    "save_scene": (),
+    "create_scene": ("scene_path", "root_node_type"),
+    "instantiate_scene": ("parent_path", "scene_path"),
+    "get_scene_dependencies": ("scene_path",),
+    "get_scene_tree_of": ("scene_path",),
+    "list_open_scenes": (),
+    "get_property_info": ("node_path", "property_name"),
+    "get_node_children_summary": ("node_path",),
+    "assign_resource_to_property": (
+        "node_path",
+        "property_name",
+        "resource_path",
+    ),
+    "get_resource_info": ("resource_path",),
+    "list_project_files": (),
+    "search_in_files": ("query",),
+    "get_global_class_list": (),
+    "get_input_map": (),
     "describe_current_scene": (),
     "batch": ("actions",),
     "final_answer": ("final_answer",),
@@ -431,6 +495,53 @@ def test_list_script_diagnostics_is_read_only_and_not_in_boundary():
         "list_script_diagnostics"
         not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
     )
+
+
+def test_python_side_inspectors_are_read_only_and_not_in_boundary():
+    """The Python-side documentation tools never touch the bridge
+    and are plain read-only inspections."""
+    for name in (
+        "get_class_documentation",
+        "search_documentation",
+    ):
+        spec = ACTION_REGISTRY[name]
+        assert spec.is_mutation is False
+        assert name not in boundary._MUTATION_TARGET_KEYS
+        assert name not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_file_based_mutations_are_registered_in_boundary():
+    """save_scene has no fields (exact fingerprint only); the other
+    file/scene mutations carry their target keys."""
+    for name, expected in (
+        ("save_scene", ()),
+        ("create_scene", ("scene_path",)),
+        ("edit_script", ("script_path",)),
+        ("replace_in_script", ("script_path",)),
+        ("instantiate_scene", ("parent_path",)),
+        ("assign_resource_to_property", ("node_path",)),
+    ):
+        assert boundary._MUTATION_TARGET_KEYS[name] == expected
+
+
+def test_scene_and_property_inspectors_are_read_only():
+    """Batch 2/3 read-only tools are read-only and boundary-free."""
+    for name in (
+        "get_scene_dependencies",
+        "get_scene_tree_of",
+        "list_open_scenes",
+        "get_property_info",
+        "get_node_children_summary",
+        "get_resource_info",
+        "list_project_files",
+        "search_in_files",
+        "get_global_class_list",
+        "get_input_map",
+    ):
+        spec = ACTION_REGISTRY[name]
+        assert spec.is_mutation is False
+        assert name not in boundary._MUTATION_TARGET_KEYS
+        assert name not in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
 
 
 def test_count_nodes_is_read_only_and_not_in_boundary():
@@ -928,6 +1039,192 @@ DISPATCH_CASES = [
         "list_script_diagnostics",
         {"script_path": "res://scripts/probe.gd"},
     ),
+    (
+        "edit_script",
+        EditScriptAction(
+            reason="r",
+            action="edit_script",
+            script_path="res://scripts/probe.gd",
+            content="extends Node\n",
+        ),
+        "edit_script",
+        {
+            "script_path": "res://scripts/probe.gd",
+            "content": "extends Node\n",
+        },
+    ),
+    (
+        "replace_in_script",
+        ReplaceInScriptAction(
+            reason="r",
+            action="replace_in_script",
+            script_path="res://scripts/probe.gd",
+            old_string="10",
+            new_string="20",
+        ),
+        "replace_in_script",
+        {
+            "script_path": "res://scripts/probe.gd",
+            "old_string": "10",
+            "new_string": "20",
+        },
+    ),
+    (
+        "save_scene",
+        SaveSceneAction(reason="r", action="save_scene"),
+        "save_scene",
+        {},
+    ),
+    (
+        "create_scene",
+        CreateSceneAction(
+            reason="r",
+            action="create_scene",
+            scene_path="res://scenes/probe.tscn",
+            root_node_type="Node2D",
+        ),
+        "create_scene",
+        {
+            "scene_path": "res://scenes/probe.tscn",
+            "root_node_type": "Node2D",
+        },
+    ),
+    (
+        "instantiate_scene",
+        InstantiateSceneAction(
+            reason="r",
+            action="instantiate_scene",
+            parent_path=".",
+            scene_path="res://scenes/probe.tscn",
+        ),
+        "instantiate_scene",
+        {
+            "parent_path": ".",
+            "scene_path": "res://scenes/probe.tscn",
+            "new_name": None,
+        },
+    ),
+    (
+        "get_scene_dependencies",
+        GetSceneDependenciesAction(
+            reason="r",
+            action="get_scene_dependencies",
+            scene_path="res://scenes/probe.tscn",
+        ),
+        "get_scene_dependencies",
+        {"scene_path": "res://scenes/probe.tscn"},
+    ),
+    (
+        "get_scene_tree_of",
+        GetSceneTreeOfAction(
+            reason="r",
+            action="get_scene_tree_of",
+            scene_path="res://scenes/probe.tscn",
+        ),
+        "get_scene_tree_of",
+        {"scene_path": "res://scenes/probe.tscn"},
+    ),
+    (
+        "list_open_scenes",
+        ListOpenScenesAction(
+            reason="r", action="list_open_scenes"
+        ),
+        "list_open_scenes",
+        {},
+    ),
+    (
+        "get_property_info",
+        GetPropertyInfoAction(
+            reason="r",
+            action="get_property_info",
+            node_path="Player",
+            property_name="position",
+        ),
+        "get_property_info",
+        {
+            "node_path": "Player",
+            "property_name": "position",
+        },
+    ),
+    (
+        "get_node_children_summary",
+        GetNodeChildrenSummaryAction(
+            reason="r",
+            action="get_node_children_summary",
+            node_path="Player",
+        ),
+        "get_node_children_summary",
+        {"node_path": "Player"},
+    ),
+    (
+        "assign_resource_to_property",
+        AssignResourceToPropertyAction(
+            reason="r",
+            action="assign_resource_to_property",
+            node_path="Player",
+            property_name="texture",
+            resource_path="res://icon.svg",
+        ),
+        "assign_resource_to_property",
+        {
+            "node_path": "Player",
+            "property_name": "texture",
+            "resource_path": "res://icon.svg",
+        },
+    ),
+    (
+        "get_resource_info",
+        GetResourceInfoAction(
+            reason="r",
+            action="get_resource_info",
+            resource_path="res://icon.svg",
+        ),
+        "get_resource_info",
+        {"resource_path": "res://icon.svg"},
+    ),
+    (
+        "list_project_files",
+        ListProjectFilesAction(
+            reason="r",
+            action="list_project_files",
+            prefix="scripts",
+            extensions=["gd"],
+        ),
+        "list_project_files",
+        {
+            "prefix": "scripts",
+            "extensions": ["gd"],
+            "limit": None,
+        },
+    ),
+    (
+        "search_in_files",
+        SearchInFilesAction(
+            reason="r",
+            action="search_in_files",
+            query="extends",
+        ),
+        "search_in_files",
+        {
+            "query": "extends",
+            "extensions": None,
+            "limit": None,
+        },
+    ),
+    (
+        "get_global_class_list",
+        GetGlobalClassListAction(
+            reason="r", action="get_global_class_list"
+        ),
+        "get_global_class_list",
+        {},
+    ),
+    (
+        "get_input_map",
+        GetInputMapAction(reason="r", action="get_input_map"),
+        "get_input_map",
+        {},
+    ),
 ]
 
 
@@ -947,6 +1244,50 @@ def test_dispatch_reaches_same_scene_tools_wrapper(
 
     assert result == {"success": True, "via": target}
     mock_fn.assert_called_once_with(**expected_kwargs)
+
+
+def test_docs_tools_dispatch_reaches_godot_docs_module(
+    agent_module, monkeypatch
+):
+    """The documentation tools are Python-side: their registry
+    handlers call tools.godot_docs, never the bridge."""
+    from tools import godot_docs
+
+    mock_docs = Mock(return_value={"success": True, "via": "docs"})
+    monkeypatch.setattr(
+        godot_docs, "get_class_documentation", mock_docs
+    )
+
+    result = agent_module._execute_single_action(
+        GetClassDocumentationAction(
+            reason="r",
+            action="get_class_documentation",
+            class_name="Node2D",
+            sections=["brief", "signals"],
+        )
+    )
+
+    assert result == {"success": True, "via": "docs"}
+    mock_docs.assert_called_once_with(
+        class_name="Node2D", sections=["brief", "signals"]
+    )
+
+    mock_search = Mock(return_value={"success": True, "via": "search"})
+    monkeypatch.setattr(
+        godot_docs, "search_documentation", mock_search
+    )
+
+    result = agent_module._execute_single_action(
+        SearchDocumentationAction(
+            reason="r",
+            action="search_documentation",
+            query="timer",
+            limit=5,
+        )
+    )
+
+    assert result == {"success": True, "via": "search"}
+    mock_search.assert_called_once_with(query="timer", limit=5)
 
 
 def test_describe_current_scene_handler_placeholder(agent_module):
