@@ -488,3 +488,111 @@ class SessionObservability:
             duration_ms=duration_ms,
             termination_reason=termination_reason,
         )
+
+
+# ==========================================
+# Persistent JSONL export
+# ==========================================
+# ROADMAP Phase 5 deferred item, now implemented: a
+# terminated session can persist its full telemetry as
+# one JSON object per line, enabling offline analysis
+# without changing any runtime behavior. Secrets never
+# enter telemetry (safe_error_message redacts keys at
+# record time), so the export inherits that guarantee.
+
+
+def export_session_jsonl(
+    observability,
+    summary=None,
+    directory=None,
+):
+    """
+    Write the session's telemetry as JSON Lines to
+    <directory>/<session_id>.jsonl (default
+    logs/telemetry relative to the working directory).
+
+    Line order: model calls, tool actions, batches,
+    mutations, compactions, then the session summary
+    (passed explicitly - it is owned by the AgentSession,
+    not by the observability instance). Returns the
+    written file path, or None when there is nothing to
+    export or writing fails (export must never break
+    session termination).
+    """
+
+    import dataclasses
+    import json as _json
+
+    if observability is None:
+        return None
+
+    has_anything = (
+        observability.model_calls
+        or observability.tool_actions
+        or observability.batches
+        or observability.mutations
+        or observability.compactions
+    )
+
+    if not has_anything:
+        return None
+
+    if directory is None:
+        directory = os.path.join(
+            "logs", "telemetry"
+        )
+
+    try:
+        os.makedirs(directory, exist_ok=True)
+
+        path = os.path.join(
+            directory,
+            f"{observability.session_id}.jsonl",
+        )
+
+        lines = []
+
+        def _dump(kind, record):
+            payload = {"type": kind}
+            payload.update(
+                dataclasses.asdict(record)
+            )
+            lines.append(
+                _json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+
+        for call in observability.model_calls:
+            _dump("model_call", call)
+
+        for action in observability.tool_actions:
+            _dump("tool_action", action)
+
+        for batch in observability.batches:
+            _dump("batch", batch)
+
+        for mutation in observability.mutations:
+            _dump("mutation", mutation)
+
+        for compaction in observability.compactions:
+            _dump("compaction", compaction)
+
+        if summary is not None:
+            _dump("summary", summary)
+
+        with open(
+            path,
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write("\n".join(lines) + "\n")
+
+        return path
+
+    except OSError:
+        # Export is best-effort observability; a write
+        # failure must never break session termination.
+        return None

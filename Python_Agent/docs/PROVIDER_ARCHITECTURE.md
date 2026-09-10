@@ -18,6 +18,13 @@ The currently relevant providers are:
 
 Future providers may be added when they provide a practical benefit.
 
+A Poolside (Laguna) adapter was evaluated in September 2026 and
+removed: structured-output compliance with the real agent prompt
+was good, but the model could not reliably conclude an agent turn
+after tool results (it re-searched or answered in prose instead of
+emitting `final_answer`), making it unfit for the turn-based loop.
+Revisit only if Poolside's chat behavior changes materially.
+
 The core agent must not depend on provider-specific implementation details.
 
 ---

@@ -973,6 +973,260 @@ func get_scene_tree_of_from_request(
 
 
 # ==========================================
+# open_scene
+# ==========================================
+# Editor-native scene switching. Deliberately guarded:
+# the bridge refuses to open while the current scene has
+# unsaved changes (silent loss prevention), and the
+# result warns that every node path from the previous
+# scene is invalid after the switch.
+
+
+func open_scene_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if editor_interface == null:
+
+		return {
+			"success": false,
+			"action": "open_scene",
+			"error": (
+				"open_scene requires the running "
+				+ "Godot editor."
+			)
+		}
+
+	var path_check := (
+		_normalize_scene_file_path(
+			data.get("scene_path"),
+			"open_scene"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var scene_path: String = (
+		path_check["scene_path"]
+	)
+
+	if not FileAccess.file_exists(scene_path):
+
+		return {
+			"success": false,
+			"error": (
+				"open_scene: scene not found: "
+				+ scene_path
+			)
+		}
+
+	var edited_scene_root: Node = (
+		editor_interface.get_edited_scene_root()
+	)
+
+	if edited_scene_root != null:
+
+		var current_path: String = (
+			edited_scene_root.scene_file_path
+		)
+
+		# Deterministic context switch guard: never
+		# discard unsaved work silently.
+
+		if current_path != "" \
+				and editor_interface.get_unsaved_scenes().has(
+					current_path
+				):
+
+			return {
+				"success": false,
+				"error": (
+					"open_scene: the currently edited "
+					+ "scene has unsaved changes ("
+					+ current_path
+					+ "). Call save_scene first."
+				)
+			}
+
+	var previous_path: String = ""
+
+	if edited_scene_root != null:
+
+		previous_path = (
+			edited_scene_root.scene_file_path
+		)
+
+	if scene_path == previous_path:
+
+		return {
+			"success": true,
+			"action": "open_scene",
+			"message": (
+				"Scene is already open and edited; "
+				+ "no change was made."
+			),
+			"scene_path": scene_path,
+			"previous_scene": previous_path,
+			"changed": false,
+			"verified_open": true,
+			"undoable": false
+		}
+
+	editor_interface.open_scene_from_path(scene_path)
+
+	# Post-operation verification: the editor's edited
+	# scene root must now be the requested file.
+
+	var new_root: Node = (
+		editor_interface.get_edited_scene_root()
+	)
+
+	var verified_open: bool = (
+		new_root != null
+		and new_root.scene_file_path == scene_path
+	)
+
+	return {
+		"success": true,
+		"action": "open_scene",
+		"message": (
+			"Scene opened successfully. All node paths "
+			+ "from the previous scene are invalid; "
+			+ "re-inspect before mutating."
+		),
+		"scene_path": scene_path,
+		"previous_scene": previous_path,
+		"root_name": (
+			str(new_root.name)
+			if new_root != null
+			else ""
+		),
+		"root_type": (
+			new_root.get_class()
+			if new_root != null
+			else ""
+		),
+		"context_switched": true,
+		"changed": true,
+		"verified_open": verified_open,
+		"undoable": false
+	}
+
+
+# ==========================================
+# save_scene_as
+# ==========================================
+# Editor-native save-as to a NEW res:// path. Existing
+# files are never overwritten (the human can do that via
+# the editor's own save-as dialog).
+
+
+func save_scene_as_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if editor_interface == null:
+
+		return {
+			"success": false,
+			"action": "save_scene_as",
+			"error": (
+				"save_scene_as requires the running "
+				+ "Godot editor."
+			)
+		}
+
+	var edited_scene_root: Node = (
+		editor_interface.get_edited_scene_root()
+	)
+
+	if edited_scene_root == null:
+
+		return {
+			"success": false,
+			"action": "save_scene_as",
+			"error": (
+				"No edited scene is currently open."
+			)
+		}
+
+	var path_check := (
+		_normalize_scene_file_path(
+			data.get("scene_path"),
+			"save_scene_as"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var scene_path: String = (
+		path_check["scene_path"]
+	)
+
+	if FileAccess.file_exists(scene_path):
+
+		return {
+			"success": false,
+			"error": (
+				"save_scene_as: scene already "
+				+ "exists: "
+				+ scene_path
+				+ ". Existing scenes are never "
+				+ "overwritten."
+			)
+		}
+
+	var previous_path: String = (
+		edited_scene_root.scene_file_path
+	)
+
+	# EditorInterface.save_scene_as() returns void in Godot
+	# 4.7, so there is no error code: the write is verified
+	# entirely by the post-save read-back below.
+
+	editor_interface.save_scene_as(scene_path)
+
+	# Post-save verification: the file exists and the
+	# edited scene's path now points at the new location.
+
+	var verified_write: bool = (
+		FileAccess.file_exists(scene_path)
+		and edited_scene_root.scene_file_path
+			== scene_path
+	)
+
+	if not verified_write:
+
+		return {
+			"success": false,
+			"action": "save_scene_as",
+			"error": (
+				"save_scene_as could not be verified: "
+				+ "the file was not written or the "
+				+ "edited scene did not switch to the "
+				+ "new path."
+			)
+		}
+
+	return {
+		"success": true,
+		"action": "save_scene_as",
+		"message": (
+			"Scene saved to the new path "
+			+ "successfully."
+		),
+		"scene_path": scene_path,
+		"previous_path": previous_path,
+		"scene_name": str(edited_scene_root.name),
+		"changed": true,
+		"verified_write": verified_write,
+		"undoable": false
+	}
+
+
+# ==========================================
 # list_open_scenes
 # ==========================================
 

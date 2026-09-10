@@ -502,6 +502,70 @@ class GetInputMapAction(BaseAction):
     action: Literal["get_input_map"]
 
 
+class RunSceneAction(BaseAction):
+
+    action: Literal["run_scene"]
+
+    scene_path: Optional[str] = None
+
+
+class StopRunAction(BaseAction):
+
+    action: Literal["stop_run"]
+
+
+class GetRuntimeOutputAction(BaseAction):
+
+    action: Literal["get_runtime_output"]
+
+    clear: Optional[bool] = None
+
+
+class OpenSceneAction(BaseAction):
+
+    action: Literal["open_scene"]
+
+    scene_path: str
+
+
+class SaveSceneAsAction(BaseAction):
+
+    action: Literal["save_scene_as"]
+
+    scene_path: str
+
+
+class SetProjectSettingsAction(BaseAction):
+
+    action: Literal["set_project_settings"]
+
+    settings_json: str
+
+
+class CreateResourceAction(BaseAction):
+
+    action: Literal["create_resource"]
+
+    resource_path: str
+
+    resource_type: str
+
+    properties_json: str
+
+
+
+class RunSceneOfflineAction(BaseAction):
+
+    action: Literal["run_scene_offline"]
+
+    scene_path: str
+
+    timeout: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=120,
+    )
+
 # ==========================================
 # Temporary prototype actions
 # ==========================================
@@ -583,6 +647,14 @@ BatchableAction = Annotated[
         SearchInFilesAction,
         GetGlobalClassListAction,
         GetInputMapAction,
+        RunSceneAction,
+        StopRunAction,
+        GetRuntimeOutputAction,
+        OpenSceneAction,
+        SaveSceneAsAction,
+        SetProjectSettingsAction,
+        CreateResourceAction,
+        RunSceneOfflineAction,
         DescribeCurrentSceneAction,
     ],
     Field(
@@ -690,6 +762,14 @@ AgentDecision = Annotated[
         SearchInFilesAction,
         GetGlobalClassListAction,
         GetInputMapAction,
+        RunSceneAction,
+        StopRunAction,
+        GetRuntimeOutputAction,
+        OpenSceneAction,
+        SaveSceneAsAction,
+        SetProjectSettingsAction,
+        CreateResourceAction,
+        RunSceneOfflineAction,
         DescribeCurrentSceneAction,
         BatchAction,
         FinalAnswerAction,

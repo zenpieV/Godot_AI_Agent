@@ -79,6 +79,14 @@ from agent.schemas import (
     SearchInFilesAction,
     GetGlobalClassListAction,
     GetInputMapAction,
+    RunSceneAction,
+    StopRunAction,
+    GetRuntimeOutputAction,
+    OpenSceneAction,
+    SaveSceneAsAction,
+    SetProjectSettingsAction,
+    CreateResourceAction,
+    RunSceneOfflineAction,
     ValidateNodeTypeAction,
 )
 from tools import scene_tools
@@ -143,6 +151,14 @@ EXECUTABLE_ACTIONS = {
     "search_in_files",
     "get_global_class_list",
     "get_input_map",
+    "run_scene",
+    "stop_run",
+    "get_runtime_output",
+    "open_scene",
+    "save_scene_as",
+    "set_project_settings",
+    "create_resource",
+    "run_scene_offline",
 }
 
 MUTATION_ACTIONS = {
@@ -166,6 +182,13 @@ MUTATION_ACTIONS = {
     "create_scene",
     "instantiate_scene",
     "assign_resource_to_property",
+    "run_scene",
+    "stop_run",
+    "open_scene",
+    "save_scene_as",
+    "set_project_settings",
+    "create_resource",
+    "run_scene_offline",
 }
 
 # The exact required-field mapping previously maintained by hand
@@ -235,6 +258,18 @@ PREVIOUS_ACTION_REQUIREMENTS = {
     "search_in_files": ("query",),
     "get_global_class_list": (),
     "get_input_map": (),
+    "run_scene": (),
+    "stop_run": (),
+    "get_runtime_output": (),
+    "open_scene": ("scene_path",),
+    "save_scene_as": ("scene_path",),
+    "set_project_settings": ("settings_json",),
+    "create_resource": (
+        "resource_path",
+        "resource_type",
+        "properties_json",
+    ),
+    "run_scene_offline": ("scene_path",),
     "describe_current_scene": (),
     "batch": ("actions",),
     "final_answer": ("final_answer",),
@@ -1225,6 +1260,94 @@ DISPATCH_CASES = [
         "get_input_map",
         {},
     ),
+    (
+        "run_scene-defaults",
+        RunSceneAction(reason="r", action="run_scene"),
+        "run_scene",
+        {"scene_path": None},
+    ),
+    (
+        "run_scene-path",
+        RunSceneAction(
+            reason="r",
+            action="run_scene",
+            scene_path="res://scenes/probe.tscn",
+        ),
+        "run_scene",
+        {"scene_path": "res://scenes/probe.tscn"},
+    ),
+    (
+        "stop_run",
+        StopRunAction(reason="r", action="stop_run"),
+        "stop_run",
+        {},
+    ),
+    (
+        "get_runtime_output-defaults",
+        GetRuntimeOutputAction(
+            reason="r", action="get_runtime_output"
+        ),
+        "get_runtime_output",
+        {"clear": False},
+    ),
+    (
+        "get_runtime_output-clear",
+        GetRuntimeOutputAction(
+            reason="r", action="get_runtime_output", clear=True
+        ),
+        "get_runtime_output",
+        {"clear": True},
+    ),
+    (
+        "open_scene",
+        OpenSceneAction(
+            reason="r",
+            action="open_scene",
+            scene_path="res://scenes/probe.tscn",
+        ),
+        "open_scene",
+        {"scene_path": "res://scenes/probe.tscn"},
+    ),
+    (
+        "save_scene_as",
+        SaveSceneAsAction(
+            reason="r",
+            action="save_scene_as",
+            scene_path="res://scenes/probe.tscn",
+        ),
+        "save_scene_as",
+        {"scene_path": "res://scenes/probe.tscn"},
+    ),
+    (
+        "set_project_settings",
+        SetProjectSettingsAction(
+            reason="r",
+            action="set_project_settings",
+            settings_json='{"display/window/size/viewport_width": 640}',
+        ),
+        "set_project_settings",
+        {
+            "settings": {
+                "display/window/size/viewport_width": 640
+            }
+        },
+    ),
+    (
+        "create_resource",
+        CreateResourceAction(
+            reason="r",
+            action="create_resource",
+            resource_path="res://resources/probe.tres",
+            resource_type="Curve",
+            properties_json='{"_min": 0.0, "_max": 1.0}',
+        ),
+        "create_resource",
+        {
+            "resource_path": "res://resources/probe.tres",
+            "resource_type": "Curve",
+            "properties": {"_min": 0.0, "_max": 1.0},
+        },
+    ),
 ]
 
 
@@ -1244,6 +1367,33 @@ def test_dispatch_reaches_same_scene_tools_wrapper(
 
     assert result == {"success": True, "via": target}
     mock_fn.assert_called_once_with(**expected_kwargs)
+
+
+def test_offline_runner_dispatch_reaches_offline_runner_module(
+    agent_module, monkeypatch
+):
+    """run_scene_offline is a Python-side tool: its handler calls
+    tools.offline_runner, never the bridge."""
+    from tools import offline_runner
+
+    mock_runner = Mock(return_value={"success": True, "via": "offline"})
+    monkeypatch.setattr(
+        offline_runner, "run_scene_offline", mock_runner
+    )
+
+    result = agent_module._execute_single_action(
+        RunSceneOfflineAction(
+            reason="r",
+            action="run_scene_offline",
+            scene_path="res://scenes/probe.tscn",
+            timeout=10,
+        )
+    )
+
+    assert result == {"success": True, "via": "offline"}
+    mock_runner.assert_called_once_with(
+        scene_path="res://scenes/probe.tscn", timeout=10
+    )
 
 
 def test_docs_tools_dispatch_reaches_godot_docs_module(

@@ -11,6 +11,12 @@ const AIAgentScriptToolsScript = preload(
 const AIAgentSceneFileToolsScript = preload(
 	"res://addons/Execution_Agent/scene/ai_agent_scene_file_tools.gd"
 )
+const AIAgentRuntimeToolsScript = preload(
+	"res://addons/Execution_Agent/scene/ai_agent_runtime_tools.gd"
+)
+const AIAgentDebuggerCaptureScript = preload(
+	"res://addons/Execution_Agent/bridge/ai_agent_debugger_capture.gd"
+)
 const AIAgentRouterScript = preload(
 	"res://addons/Execution_Agent/bridge/ai_agent_router.gd"
 )
@@ -27,6 +33,8 @@ var property_tools: AIAgentPropertyTools
 var editor_tools: RefCounted
 var script_tools: AIAgentScriptTools
 var scene_file_tools: AIAgentSceneFileTools
+var runtime_tools: AIAgentRuntimeTools
+var debugger_capture: AIAgentDebuggerCapture
 var router: RefCounted
 var http_bridge: AIAgentHTTP
 
@@ -41,6 +49,12 @@ func _enter_tree() -> void:
 	undo_redo = get_undo_redo()
 
 	initialize_modules()
+
+	# Register the agent's debugger capture so
+	# get_runtime_output can read what a game run via
+	# run_scene actually prints and reports.
+
+	add_debugger_plugin(debugger_capture)
 
 	var error: int = tcp_server.listen(
 		8081,
@@ -68,6 +82,8 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+
+	remove_debugger_plugin(debugger_capture)
 
 	tcp_server.stop()
 
@@ -118,12 +134,29 @@ func initialize_modules() -> void:
 		undo_redo
 	)
 
+	# The debugger capture may already have been created
+	# by _get_debugger_plugin() (the editor can query it
+	# before this point); never replace a registered
+	# instance.
+
+	if debugger_capture == null:
+
+		debugger_capture = (
+			AIAgentDebuggerCaptureScript.new()
+		)
+
+	runtime_tools = AIAgentRuntimeToolsScript.new(
+		get_editor_interface(),
+		debugger_capture
+	)
+
 	router = AIAgentRouterScript.new(
 		node_tools,
 		property_tools,
 		editor_tools,
 		script_tools,
-		scene_file_tools
+		scene_file_tools,
+		runtime_tools
 	)
 
 	http_bridge = AIAgentHTTP.new(

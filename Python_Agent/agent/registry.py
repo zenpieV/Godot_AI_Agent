@@ -92,10 +92,19 @@ from agent.schemas import (
     SearchInFilesAction,
     GetGlobalClassListAction,
     GetInputMapAction,
+    RunSceneAction,
+    StopRunAction,
+    GetRuntimeOutputAction,
+    OpenSceneAction,
+    SaveSceneAsAction,
+    SetProjectSettingsAction,
+    CreateResourceAction,
+    RunSceneOfflineAction,
     ValidateNodeTypeAction,
 )
 
 from tools import godot_docs
+from tools import offline_runner
 
 
 @dataclass(frozen=True)
@@ -642,6 +651,89 @@ def _execute_get_input_map(decision):
     return scene_tools.get_input_map()
 
 
+def _execute_run_scene(decision):
+    return scene_tools.run_scene(
+        scene_path=(
+            decision.scene_path
+        ),
+    )
+
+
+def _execute_stop_run(decision):
+    return scene_tools.stop_run()
+
+
+def _execute_get_runtime_output(decision):
+    return scene_tools.get_runtime_output(
+        clear=(
+            decision.clear
+            if decision.clear is not None
+            else False
+        ),
+    )
+
+
+def _execute_open_scene(decision):
+    return scene_tools.open_scene(
+        scene_path=(
+            decision.scene_path
+        ),
+    )
+
+
+def _execute_save_scene_as(decision):
+    return scene_tools.save_scene_as(
+        scene_path=(
+            decision.scene_path
+        ),
+    )
+
+
+def _execute_set_project_settings(decision):
+    parsed_settings = (
+        json.loads(
+            decision.settings_json
+        )
+    )
+
+    return scene_tools.set_project_settings(
+        settings=(
+            parsed_settings
+        ),
+    )
+
+
+def _execute_run_scene_offline(decision):
+    return offline_runner.run_scene_offline(
+        scene_path=(
+            decision.scene_path
+        ),
+        timeout=(
+            decision.timeout
+        ),
+    )
+
+
+def _execute_create_resource(decision):
+    parsed_properties = (
+        json.loads(
+            decision.properties_json
+        )
+    )
+
+    return scene_tools.create_resource(
+        resource_path=(
+            decision.resource_path
+        ),
+        resource_type=(
+            decision.resource_type
+        ),
+        properties=(
+            parsed_properties
+        ),
+    )
+
+
 def _execute_describe_current_scene(decision):
     # Temporary prototype handler: vision is not connected yet,
     # so this returns a fixed placeholder instead of asking Godot.
@@ -1097,6 +1189,66 @@ _ACTION_SPECS = (
         required_fields=(),
         is_mutation=False,
         handler=_execute_get_input_map,
+    ),
+    ActionSpec(
+        name="run_scene",
+        schema=RunSceneAction,
+        required_fields=(),
+        is_mutation=True,
+        handler=_execute_run_scene,
+    ),
+    ActionSpec(
+        name="stop_run",
+        schema=StopRunAction,
+        required_fields=(),
+        is_mutation=True,
+        handler=_execute_stop_run,
+    ),
+    ActionSpec(
+        name="get_runtime_output",
+        schema=GetRuntimeOutputAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_get_runtime_output,
+    ),
+    ActionSpec(
+        name="open_scene",
+        schema=OpenSceneAction,
+        required_fields=("scene_path",),
+        is_mutation=True,
+        handler=_execute_open_scene,
+    ),
+    ActionSpec(
+        name="save_scene_as",
+        schema=SaveSceneAsAction,
+        required_fields=("scene_path",),
+        is_mutation=True,
+        handler=_execute_save_scene_as,
+    ),
+    ActionSpec(
+        name="set_project_settings",
+        schema=SetProjectSettingsAction,
+        required_fields=("settings_json",),
+        is_mutation=True,
+        handler=_execute_set_project_settings,
+    ),
+    ActionSpec(
+        name="run_scene_offline",
+        schema=RunSceneOfflineAction,
+        required_fields=("scene_path",),
+        is_mutation=True,
+        handler=_execute_run_scene_offline,
+    ),
+    ActionSpec(
+        name="create_resource",
+        schema=CreateResourceAction,
+        required_fields=(
+            "resource_path",
+            "resource_type",
+            "properties_json",
+        ),
+        is_mutation=True,
+        handler=_execute_create_resource,
     ),
     # --- Control actions (no tool dispatch; intercepted in the
     # main loop / orchestrated by execute_batch_actions) ---

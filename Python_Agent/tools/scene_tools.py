@@ -1381,3 +1381,173 @@ def get_input_map():
         method="POST",
         payload={}
     )
+
+
+def run_scene(
+    scene_path=None
+):
+    """
+    Run the game from the running Godot editor so the
+    agent can observe real behavior.
+
+    Without a scene_path the project's MAIN scene is run;
+    with a scene_path that scene is run instead. Requires
+    the running editor. The result reports the playing
+    scene path; combine with get_runtime_output to read
+    the game's errors and output, and stop_run to end it.
+    """
+
+    payload = {
+        "scene_path": scene_path
+    }
+
+    return _request_json(
+        endpoint="/run_scene",
+        method="POST",
+        payload=payload
+    )
+
+
+def stop_run():
+    """
+    Stop the game currently run from the Godot editor.
+
+    Requires the running editor. The result verifies that
+    the editor reports no playing scene afterwards.
+    """
+
+    return _request_json(
+        endpoint="/stop_run",
+        method="POST",
+        payload={}
+    )
+
+
+def get_runtime_output(
+    clear=False
+):
+    """
+    Read the output and error messages captured from the
+    game running via run_scene, oldest first.
+
+    Entries carry a kind ("output" or "error") and text.
+    With clear=True the buffer is emptied after the read
+    so the next call only reports new entries; with the
+    default clear=False the buffer is left intact. The
+    buffer is bounded; dropped counts are reported.
+    Requires the running editor.
+    """
+
+    payload = {
+        "clear": clear
+    }
+
+    return _request_json(
+        endpoint="/get_runtime_output",
+        method="POST",
+        payload=payload
+    )
+
+
+def open_scene(
+    scene_path
+):
+    """
+    Open a scene file in the Godot editor, making it the
+    edited scene.
+
+    CONTEXT SWITCH WARNING: after opening, all node paths
+    from the previously edited scene are invalid. The
+    bridge refuses to open while the current scene has
+    unsaved changes (save_scene first). Requires the
+    running editor.
+    """
+
+    payload = {
+        "scene_path": scene_path
+    }
+
+    return _request_json(
+        endpoint="/open_scene",
+        method="POST",
+        payload=payload
+    )
+
+
+def save_scene_as(
+    scene_path
+):
+    """
+    Save the currently edited scene to a NEW res:// path
+    (editor-native save-as). The scene's file path
+    changes to the new location; the result verifies the
+    write. Requires the running editor.
+    """
+
+    payload = {
+        "scene_path": scene_path
+    }
+
+    return _request_json(
+        endpoint="/save_scene_as",
+        method="POST",
+        payload=payload
+    )
+
+
+def set_project_settings(
+    settings
+):
+    """
+    Set one or more project settings (e.g. display
+    resolution, window flags, physics values) in the
+    live ProjectSettings.
+
+    settings must be a dictionary mapping canonical
+    setting keys to values. Sensitive keys (password,
+    token, secret, api_key, credential, private_key) are
+    rejected. The result reports the previous value of
+    every changed key so the human can revert, and
+    verifies each value by reading it back. Values are
+    persisted to project.godot when the editor saves the
+    project.
+    """
+
+    payload = {
+        "settings": settings
+    }
+
+    return _request_json(
+        endpoint="/set_project_settings",
+        method="POST",
+        payload=payload
+    )
+
+
+def create_resource(
+    resource_path,
+    resource_type,
+    properties
+):
+    """
+    Create a NEW file-backed resource (.tres) of the
+    requested Resource type with the given properties.
+
+    The bridge validates that the type exists and is an
+    instantiable Resource, applies the properties with
+    type-aware deserialization, saves the file, and
+    verifies by loading it back. Existing files are never
+    overwritten. File creation is not undoable.
+    """
+
+    payload = {
+        "resource_path": resource_path,
+        "resource_type": resource_type,
+        "properties": properties
+    }
+
+    return _request_json(
+        endpoint="/create_resource",
+        method="POST",
+        payload=payload
+    )

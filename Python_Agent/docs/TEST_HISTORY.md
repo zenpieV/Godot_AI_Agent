@@ -2377,3 +2377,117 @@ Remaining known gaps: `open_scene` deferred (edited-scene context
 invalidation), `create_resource` deferred (design), vision
 (describe_current_scene) and runtime/playtest tools remain future
 work per FUTURE_TOOLS.md.
+
+# Autonomy Milestone: Runtime Loop, Scene Navigation, Project Configuration (2026-09-10)
+
+## Scope
+
+Eight tools plus two agent-infrastructure features in one session,
+completing the structurally possible tool surface (vision and
+editor UI excluded). Registry: 56 -> **64 actions** (38 read-only,
+23 mutations, 3 meta).
+
+**Playtest loop:** `run_scene` (editor play, main or custom scene,
+verified via `is_playing_scene`/`get_playing_scene`; refuses when
+a game is already running), `stop_run` (idempotent,
+`verified_stop` read-back), `get_runtime_output` (debugger-capture
+buffer, bounded 500, `clear` semantics), and `run_scene_offline`
+(Python-side subprocess runner: headless scene execution with
+exit code, bounded stdout/stderr, `script_errors_detected`, and
+a killing timeout).
+
+**Scene navigation/configuration:** `open_scene` (unsaved-changes
+guard, context-switch warning, verified via scene_file_path),
+`save_scene_as` (never overwrites; the API returns void so the
+write is verified by read-back), `set_project_settings` (1-10
+settings, sensitive keys rejected, previous values reported for
+manual revert, per-key read-back verification), `create_resource`
+(ClassDB-validated instantiable Resource types only, explicit
+unknown-property rejection, .tres only, load-back verified).
+
+**Infrastructure:** telemetry JSONL export
+(`export_session_jsonl`; summary owned by AgentSession and passed
+explicitly — a bug caught by tests) wired into session
+termination, best-effort and never breaking it; the documented
+empty-input silent-termination gap fixed (now logged).
+
+## Rule 12 handling
+
+All eight new actions follow tolerated live-validated schema
+precedents; no nested-batch exclusions needed. Verified in the
+live smoke implicitly by valid decision generation.
+
+## Python tests
+
+Full suite: **348 passed** (+18: dispatch cases, boundary
+fingerprint/target tests including save_scene's empty-target
+semantics, mutation records, telemetry export wiring, and the
+Python-side offline-runner dispatch test).
+
+## Godot headless harness
+
+`runtime_tools_harness.gd` (new, headless): debugger-buffer
+behavior is live-validated only (the EditorDebuggerPlugin base
+class cannot be instantiated headless — `.new()` returns null);
+project-settings cases (validation, sensitive rejection,
+previous-value reporting, read-back verification, cleanup of the
+test key) and resource cases (type validation including
+non-instantiable and Node types, .tres path rule, unknown-property
+rejection, create/load-back/overwrite-refusal) run fully headless
+with self-cleaning. All other harnesses: regression green.
+
+## Live bridge validation (isolated editor instance)
+
+- Full autonomous pipeline: `open_scene` (with context-switch
+  warning) → `attach_script` → `run_scene` → probe script
+  self-quits → `stop_run` idempotency — all verified.
+- `save_scene_as`: verified write + path switch.
+- `set_project_settings`: two keys set, previous values reported
+  (application/config/name changed Agent_Host ->
+  Agent_Host_LiveCheck in the disposable copy), per-key verified.
+- `create_resource` + `get_resource_info`: Curve created and
+  inspected as Curve.
+- `run_scene_offline` (against the copy, via PROJECT_PATH
+  override): captured print output in stdout AND a push_error
+  backtrace in stderr from a real subprocess run, with exit code
+  0 and `script_errors_detected: false`.
+
+### Engine limitation found (drives the design)
+
+Godot 4.7.2's built-in debugger consumes a game's output and
+error messages BEFORE editor debugger plugins are consulted:
+`_has_capture` was queried for arbitrary prefixes
+("agent_probe", "game_view") but never for "error"/"output", so
+plugins cannot intercept a game's built-in output. This is why
+runtime output reading is implemented as `run_scene_offline`
+(subprocess ownership) rather than debugger interception. The
+debugger capture remains registered for custom-capture
+integrations.
+
+### Bugs found and fixed during validation
+
+1. `export_session_jsonl` read `summary` from the observability
+   instance; the summary is owned by the AgentSession — caught
+   immediately by the test-suite bootstrap (AttributeError during
+   terminate would have broken every session end).
+2. `EditorInterface.save_scene_as()` returns void in 4.7 (unlike
+   `save_scene()`), so the mutation is verified purely by
+   read-back.
+3. Debugger plugin registration uses
+   `EditorPlugin.add_debugger_plugin()` in 4.7 — the
+   `_get_debugger_plugin()` virtual from older documentation is
+   never queried; registration now happens in `_enter_tree`.
+
+## Status
+
+Confirmed working. Python: 348 passed. Six headless harnesses
+green. Live bridge: playtest loop, scene navigation, project
+configuration, resource creation, and offline execution all
+matched the documented contract. The agent can now autonomously:
+build scenes, write and edit scripts, wire signals, configure the
+project, create resources, RUN its work headless, read its own
+errors, and iterate — the full edit → run → fix loop from the
+project goals. Remaining gaps: vision (describe_current_scene),
+runtime tree/input inspection (needs in-game instrumentation),
+editor UI (user-directed), agent-triggered undo (shared undo
+stack with the human — deliberately rejected).

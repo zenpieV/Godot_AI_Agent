@@ -1945,6 +1945,268 @@ reports only project actions.
 ---
 
 
+# Tool: run_scene
+
+## Purpose
+
+Runs the game from the editor (EditorInterface play
+methods) so the human can watch it live. Without
+`scene_path` the project's MAIN scene runs; with a
+scene_path that scene runs instead. Verified by
+`is_playing_scene()` / `get_playing_scene()` read-back.
+
+IMPORTANT: to read the game's output and errors
+autonomously, use `run_scene_offline` instead - the
+engine's built-in debugger consumes a game's output and
+error messages before editor plugins can see them, so
+editor-side output capture is not possible.
+
+## Request
+
+```json
+{"action": "run_scene", "reason": "Run the level.",
+ "scene_path": "res://scenes/level.tscn"}
+```
+
+- `scene_path` optional (.tscn, strict path rules);
+  omit for the main scene.
+- Refuses when a game is already running (call
+  `stop_run` first).
+
+## Success response
+
+`success`, `playing_scene`, `requested_scene`,
+`is_playing: true`, `changed: true`, `verified_run: true`,
+`undoable: false`.
+
+## Failure response
+
+```json
+{"error": "A game is already running (res://...). Call stop_run first.",
+ "success": false}
+```
+
+---
+
+
+# Tool: stop_run
+
+## Purpose
+
+Stops the game run from the editor. Idempotent: with
+nothing playing it is a no-op success. Verified by
+`is_playing_scene()` read-back. Requires the running
+editor.
+
+## Success response
+
+`success`, `stopped_scene` (when one was running),
+`changed`, `is_playing: false`, `verified_stop: true`,
+`undoable: false`.
+
+---
+
+
+# Tool: get_runtime_output
+
+## Purpose
+
+Reads entries captured by the plugin's debugger capture
+(registered via `EditorPlugin.add_debugger_plugin`).
+
+ENGINE LIMITATION (verified on 4.7.2): a game's built-in
+output and error messages are consumed by the editor's
+own debugger and are NOT routed to editor debugger
+plugins. This tool therefore only ever sees messages a
+game sends under custom capture prefixes via
+`EngineDebugger.send_message`. For autonomous output
+reading use `run_scene_offline`.
+
+## Request / Result
+
+Request: optional `clear` (boolean, default false; true
+empties the buffer after the read). Result: `entries`
+(list of `{kind, text, session_id}`), `count`, `dropped`,
+`buffer_full` (bounded at 500), `is_playing`,
+`playing_scene`, `cleared`.
+
+---
+
+
+# Tool: open_scene
+
+## Purpose
+
+Opens a scene file, making it the edited scene
+(editor-native). Guarded: refuses while the current
+scene has unsaved changes (silent loss prevention), and
+the result warns that all node paths from the previous
+scene are invalid after the switch. Verified by the
+edited root's `scene_file_path` read-back.
+
+## Request
+
+```json
+{"action": "open_scene", "reason": "Work in the level now.",
+ "scene_path": "res://scenes/level.tscn"}
+```
+
+## Success response
+
+`success`, `scene_path`, `previous_scene`, `root_name`,
+`root_type`, `context_switched: true`, `changed: true`,
+`verified_open: true`, `undoable: false`. Idempotent
+when the requested scene is already the edited scene.
+
+## Failure response
+
+```json
+{"error": "open_scene: the currently edited scene has unsaved changes (res://...). Call save_scene first.",
+ "success": false}
+```
+
+---
+
+
+# Tool: save_scene_as
+
+## Purpose
+
+Editor-native save-as of the currently edited scene to a
+NEW res:// path. Existing files are never overwritten.
+`EditorInterface.save_scene_as()` returns void, so the
+write is verified entirely by read-back: the file exists
+and the edited scene's path switched to the new location.
+Requires the running editor.
+
+## Request / Result
+
+Request: `scene_path` (.tscn, strict path rules).
+Result: `success`, `scene_path`, `previous_path`,
+`scene_name`, `changed: true`, `verified_write: true`,
+`undoable: false`.
+
+---
+
+
+# Tool: set_project_settings
+
+## Purpose
+
+Sets one or more project settings in the live
+ProjectSettings (display, physics, window, etc.).
+Not undoable: every changed key's previous value is
+reported in the result so the human can revert, and
+values persist to project.godot when the editor saves
+the project. Sensitive keys (password/token/secret/
+api_key/credential/private_key) are rejected outright.
+Works headless.
+
+## Request
+
+```json
+{"action": "set_project_settings",
+ "reason": "Switch the game to 1280x720.",
+ "settings_json": "{\"display/window/size/viewport_width\": 1280}"}
+```
+
+- 1-10 settings per call; existing keys are coerced to
+  their current type before validation.
+
+## Success response
+
+`settings` (list of `{key, had_previous, previous_value,
+new_value, verified}`), `setting_count`, `changed: true`,
+`verified_settings`, `undoable: false`.
+
+---
+
+
+# Tool: create_resource
+
+## Purpose
+
+Creates a NEW file-backed `.tres` resource of the
+requested Resource type (ClassDB-validated: must be an
+instantiable Resource, never a Node) with type-aware
+property application (same serialization rules as
+`set_properties`). Unknown property names are rejected
+explicitly (`Object.set` would silently ignore them).
+Never overwrites; creates parent directories; verified
+by loading the file back. Works headless. Not undoable.
+
+## Request
+
+```json
+{"action": "create_resource",
+ "reason": "The enemy AI needs its curve.",
+ "resource_path": "res://resources/patrol.tres",
+ "resource_type": "Curve",
+ "properties_json": "{\"max_value\": 10.0}"}
+```
+
+## Success response
+
+`success`, `resource_path`, `resource_type`,
+`property_count`, `changed: true`, `verified_write: true`,
+`undoable: false`.
+
+---
+
+
+# Tool: run_scene_offline
+
+## Purpose
+
+Python-side tool (never touches the bridge): runs a scene
+as a HEADLESS subprocess via the configured engine binary
+(`GODOT_BINARY_PATH` / `PROJECT_PATH` in
+`config/settings.py`, env-overridable) and returns its
+exit code, stdout, and stderr. This is the autonomous
+playtest tool: after creating or editing scripts and
+scenes, run the scene offline, read
+`script_errors_detected` / stderr backtraces, fix, and
+re-run - a full behavioral feedback loop with no editor
+and no human in the loop. A scene that outlives the
+timeout is killed and reported as timed out, never as
+successful. Output is bounded (tail) with truncation
+flags.
+
+## Request
+
+```json
+{"action": "run_scene_offline",
+ "reason": "Check the probe scene for errors.",
+ "scene_path": "res://scenes/probe_run.tscn",
+ "timeout": 30}
+```
+
+## Successful Result
+
+```json
+{
+  "action": "run_scene_offline",
+  "scene_path": "res://scenes/probe_run.tscn",
+  "timeout_seconds": 30,
+  "timed_out": false,
+  "exit_code": 0,
+  "duration_s": 0.42,
+  "stdout": "...",
+  "stdout_truncated": false,
+  "stderr": "ERROR: ...
+   at: push_error ...",
+  "stderr_truncated": false,
+  "script_errors_detected": false,
+  "success": true
+}
+```
+
+`script_errors_detected` is true when the stderr
+contains "SCRIPT ERROR" entries.
+
+---
+
+
 # Tool: reparent_node
 
 ## Purpose

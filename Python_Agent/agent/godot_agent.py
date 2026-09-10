@@ -32,6 +32,7 @@ from agent.telemetry import (
     ProviderResult,
     SessionObservability,
     TokenUsage,
+    export_session_jsonl,
     safe_error_message,
 )
 
@@ -1537,6 +1538,18 @@ class AgentSession:
                 reason,
             )
 
+            export_path = export_session_jsonl(
+                self.observability,
+                summary=self.summary,
+            )
+
+            if export_path is not None:
+
+                self.logger.info(
+                    "Session telemetry exported: %s",
+                    export_path,
+                )
+
     def begin_next_turn(self):
 
         try:
@@ -1545,6 +1558,10 @@ class AgentSession:
             )
         except EOFError:
             self.terminate()
+            self.logger.info(
+                "Agent session terminated: input stream "
+                "ended (EOF)."
+            )
             return False
 
         if next_request.strip() == self.TERMINATION_COMMAND:
@@ -1556,6 +1573,9 @@ class AgentSession:
 
         if not next_request.strip():
             self.terminate()
+            self.logger.info(
+                "Agent session terminated by empty input."
+            )
             return False
 
         self.current_request = next_request
@@ -1675,8 +1695,7 @@ conversation = [
         "content": f"""
 You are an AI assistant helping a developer
 work with Godot.
-The developer who is developing you is called 'zenpieV'.
-This is only your developer, not necessarily the end user of the Godot project you are helping with.
+
 You operate in an iterative agent loop.
 
 The loop works like this:
@@ -2182,7 +2201,108 @@ events. Read-only.
 
 Required parameters: none
 
-40. validate_node_type
+40. run_scene
+
+Runs the game from the editor (visible to the human in
+the editor). Without scene_path the project's MAIN scene
+runs; with a scene_path that scene runs instead. Use
+stop_run to end the game. To READ the game's output and
+errors yourself, use run_scene_offline instead. Requires
+the running editor.
+
+Optional parameter:
+
+scene_path
+
+41. stop_run
+
+Stops the game currently run from the editor. The result
+verifies that nothing is playing afterwards. Requires the
+running editor.
+
+Required parameters: none
+
+42. get_runtime_output
+
+Reads entries captured from custom debugger captures of
+a game run via run_scene. NOTE: the engine's built-in
+output/error messages are consumed by the editor's own
+debugger and do NOT appear here. To read a scene's
+output and errors autonomously, use run_scene_offline.
+
+Optional parameter:
+
+clear
+
+43. open_scene
+
+Opens a scene file, making it the edited scene. After
+opening, node paths from the previous scene are INVALID;
+re-inspect with find_nodes or get_scene_tree. The bridge
+refuses to open while the current scene has unsaved
+changes (save_scene first). Requires the running editor.
+
+Required parameter:
+
+scene_path
+
+44. save_scene_as
+
+Saves the currently edited scene to a NEW res:// path.
+The scene's file path changes to the new location.
+Requires the running editor.
+
+Required parameter:
+
+scene_path
+
+45. set_project_settings
+
+Sets one or more project settings (e.g. display/window
+size, physics values) in the live ProjectSettings.
+settings_json must be a JSON object mapping canonical
+setting keys to values. The result reports each key's
+previous value so the human can revert, and verifies the
+new values by reading them back. Sensitive keys are
+rejected.
+
+Required parameter:
+
+settings_json (serialized JSON object)
+
+46. create_resource
+
+Creates a NEW file-backed .tres resource of the requested
+Resource type with the given properties (same
+serialization rules as set_properties). Existing files
+are never overwritten. The result verifies by loading
+the resource back.
+
+Required parameters:
+
+resource_path (res:// path ending in .tres)
+resource_type (a Resource class, e.g. Curve)
+properties_json (serialized JSON object)
+
+47. run_scene_offline
+
+Runs a scene as a HEADLESS process (not in the editor)
+and returns its exit code, stdout, and stderr. This is
+the autonomous playtest tool: after creating or editing
+scripts and scenes, run the scene offline to check for
+SCRIPT ERROR entries and verify behavior, then fix and
+re-run. A scene that never exits is killed at the
+timeout and reported as timed out.
+
+Required parameter:
+
+scene_path
+
+Optional parameter:
+
+timeout (seconds, 1-120, default 30)
+
+48. validate_node_type
 
 Use before create_node whenever you are not
 completely certain that a Godot class name is
@@ -2202,7 +2322,7 @@ Resource) or cannot be instantiated directly
 (for example CanvasItem) is reported as not
 valid for node creation.
 
-41. list_available_node_types
+49. list_available_node_types
 
 Use to discover native, instantiable Godot Node
 types before validating an exact candidate or
@@ -2220,7 +2340,7 @@ total_matches and truncated before assuming the
 list is exhaustive. Use validate_node_type on a
 chosen exact name before create_node when needed.
 
-42. get_node_class_info
+50. get_node_class_info
 
 Use to inspect one registered Godot class. The
 result includes its direct base class and whether
@@ -2231,7 +2351,7 @@ Required parameter:
 
 class_name
 
-43. list_node_signals
+51. list_node_signals
 
 Use to inspect the signals exposed by one node.
 The result includes built-in and inherited signal
@@ -2241,7 +2361,7 @@ Required parameter:
 
 node_path
 
-44. list_node_groups
+52. list_node_groups
 
 Use to inspect the groups that one node currently
 belongs to. Group membership is instance state and
@@ -2251,7 +2371,7 @@ Required parameter:
 
 node_path
 
-45. count_nodes
+53. count_nodes
 
 Use when only the number of matching nodes is
 needed. It shares find_nodes filters and returns
@@ -2264,7 +2384,7 @@ node_type
 parent_path
 name_match
 
-46. find_nodes_by_script
+54. find_nodes_by_script
 
 Use to find nodes with an exact attached script
 resource path. A missing res:// prefix is normalized.
@@ -2273,7 +2393,7 @@ Required parameter:
 
 script_path
 
-47. find_nodes_by_group
+55. find_nodes_by_group
 
 Use to find nodes with exact, case-sensitive live
 membership in one group. Zero matches is a success.
@@ -2282,7 +2402,7 @@ Required parameter:
 
 group_name
 
-48. get_project_settings
+56. get_project_settings
 
 Use to inspect project configuration from live
 ProjectSettings. Provide exact setting names and/or
@@ -2295,37 +2415,37 @@ setting_names
 prefix
 limit
 
-49. list_autoloads
+57. list_autoloads
 
 Use to list configured project autoload names and
 resource targets. It reads live ProjectSettings,
 returns deterministic ordering, and is read-only.
 
-50. get_editor_state
+58. get_editor_state
 
 Use to inspect bounded current editor state,
 including the edited scene, open scenes, selected
 nodes, and playing-scene state. It requires the
 running editor plugin and does not scrape UI text.
 
-51. list_scenes_in_project
+59. list_scenes_in_project
 
 Use to list scene resources known to the running
 editor filesystem. Results are sorted and the tool
 reports an explicit not-ready error while scanning
 or importing.
 
-52. get_undo_history_summary
+60. get_undo_history_summary
 
 Use to inspect whether editor undo or redo is
 available and to read stable action labels. It is
 read-only; never use it to perform undo or redo.
 
-53. describe_current_scene
+61. describe_current_scene
 
 Use only when visual information is necessary.
 
-54. final_answer
+62. final_answer
 
 Use only when the informational request has been
 answered or every requested operation has been
@@ -2338,7 +2458,7 @@ Required parameter:
 
 final_answer
 
-55. exit_session
+63. exit_session
 
 Use only when the entire persistent session is
 explicitly complete or genuinely unrecoverable.
@@ -2378,7 +2498,7 @@ exit_summary
 exit_summary must briefly explain why the session is
 being terminated.
 
-56. batch
+64. batch
 
 Use only when you are already confident about a
 short, strictly sequential series of KNOWN,

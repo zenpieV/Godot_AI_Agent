@@ -1256,3 +1256,564 @@ func get_resource_info_from_request(
 		# so read it defensively instead of via member access.
 		"local_to_scene": resource.get("local_to_scene"),
 	}
+
+
+# ==========================================
+# set_project_settings
+# ==========================================
+# Project-level configuration mutation (e.g. display
+# resolution, window flags, physics values). Works
+# headless and in the editor. Not undoable: the result
+# reports every key's previous value so the human can
+# revert, and the values persist to project.godot when
+# the editor saves the project. Sensitive keys are
+# rejected outright.
+
+const SENSITIVE_SETTING_TOKENS := [
+	"password",
+	"token",
+	"secret",
+	"api_key",
+	"credential",
+	"private_key",
+]
+
+const MAX_SETTINGS_PER_CALL := 10
+
+
+func set_project_settings_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("settings"):
+
+		return {
+			"success": false,
+			"error": (
+				"set_project_settings requires "
+				+ "settings."
+			)
+		}
+
+	if not (data["settings"] is Dictionary):
+
+		return {
+			"success": false,
+			"error": (
+				"set_project_settings settings "
+				+ "must be an object."
+			)
+		}
+
+	var requested: Dictionary = data["settings"]
+
+	if requested.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"set_project_settings requires at "
+				+ "least one setting."
+			)
+		}
+
+	if requested.size() > MAX_SETTINGS_PER_CALL:
+
+		return {
+			"success": false,
+			"error": (
+				"set_project_settings accepts at "
+				+ "most "
+				+ str(MAX_SETTINGS_PER_CALL)
+				+ " settings per call."
+			)
+		}
+
+	# Sensitive settings are rejected before anything is
+	# touched - names only are ever surfaced.
+
+	for setting_name in requested:
+
+		var lower_name := str(setting_name).to_lower()
+
+		for token in SENSITIVE_SETTING_TOKENS:
+
+			if token in lower_name:
+
+				return {
+					"success": false,
+					"error": (
+						"set_project_settings refuses "
+						+ "sensitive setting keys ("
+						+ "matched: "
+						+ token
+						+ ")."
+					)
+				}
+
+	# Validate and prepare every change BEFORE applying
+	# any of them, mirroring set_properties.
+
+	var prepared: Array = []
+
+	for setting_name in requested:
+
+		var key := str(setting_name).strip_edges()
+
+		if key.is_empty():
+
+			return {
+				"success": false,
+				"error": (
+					"set_project_settings requires "
+					+ "non-empty setting names."
+				)
+			}
+
+		var had_previous: bool = (
+			ProjectSettings.has_setting(key)
+		)
+
+		var previous_value: Variant = null
+
+		var type_id: int = TYPE_NIL
+
+		if had_previous:
+
+			previous_value = (
+				ProjectSettings.get_setting(key)
+			)
+
+			type_id = typeof(previous_value)
+
+		var deserialize_result := (
+			variant_serializer
+			.deserialize_property_value(
+				requested[setting_name],
+				type_id
+			)
+		)
+
+		if not deserialize_result["success"]:
+
+			return {
+				"success": false,
+				"error": (
+					"Invalid value for setting "
+					+ key
+					+ ": "
+					+ str(deserialize_result["error"])
+				)
+			}
+
+		prepared.append(
+			{
+				"key": key,
+				"had_previous": had_previous,
+				"previous_value": previous_value,
+				"new_value": deserialize_result[
+					"value"
+				],
+			}
+		)
+
+	# Apply all changes, then verify each by reading back.
+
+	var results: Array = []
+
+	var all_verified := true
+
+	for change in prepared:
+
+		ProjectSettings.set_setting(
+			change["key"],
+			change["new_value"]
+		)
+
+		var read_back: Variant = (
+			ProjectSettings.get_setting(
+				change["key"]
+			)
+		)
+
+		var verified: bool = (
+			read_back == change["new_value"]
+		)
+
+		if not verified:
+			all_verified = false
+
+		results.append(
+			{
+				"key": change["key"],
+				"previous_value": (
+					variant_serializer
+					.serialize_property_value(
+						change["previous_value"]
+					)
+					if change["had_previous"]
+					else null
+				),
+				"had_previous": change[
+					"had_previous"
+				],
+				"new_value": (
+					variant_serializer
+					.serialize_property_value(
+						change["new_value"]
+					)
+				),
+				"verified": verified,
+			}
+		)
+
+	return {
+		"success": true,
+		"action": "set_project_settings",
+		"message": (
+			"Project settings updated. Values persist "
+			+ "to project.godot when the editor saves "
+			+ "the project. Previous values are "
+			+ "reported for manual revert."
+		),
+		"setting_count": results.size(),
+		"settings": results,
+		"changed": true,
+		"verified_settings": all_verified,
+		"undoable": false
+	}
+
+
+# ==========================================
+# create_resource
+# ==========================================
+# File-backed .tres resource creation with type-aware
+# property application. Complements
+# assign_resource_to_property: create, then assign.
+# Never overwrites; verified by loading the file back.
+
+
+func _normalize_tres_path(
+	raw_path,
+	action_name: String
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_resource_file_path(
+			raw_path,
+			action_name
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var resource_path: String = (
+		path_check["resource_path"]
+	)
+
+	if not resource_path.ends_with(".tres"):
+
+		return {
+			"success": false,
+			"error": (
+				action_name
+				+ " requires a resource_path "
+				+ "ending in .tres."
+			)
+		}
+
+	return {
+		"ok": true,
+		"resource_path": resource_path
+	}
+
+
+func create_resource_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_tres_path(
+			data.get("resource_path"),
+			"create_resource"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var resource_path: String = (
+		path_check["resource_path"]
+	)
+
+	if not data.has("resource_type"):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource requires "
+				+ "resource_type."
+			)
+		}
+
+	if typeof(data["resource_type"]) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource resource_type "
+				+ "must be a string."
+			)
+		}
+
+	var resource_type: String = (
+		str(data["resource_type"]).strip_edges()
+	)
+
+	if resource_type.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource requires a "
+				+ "non-empty resource_type."
+			)
+		}
+
+	# The bridge is authoritative over the class
+	# namespace: only instantiable Resource types are
+	# accepted (never Nodes, never abstract classes).
+
+	if not ClassDB.class_exists(resource_type):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource: unknown class "
+				+ "name: "
+				+ resource_type
+			)
+		}
+
+	if not ClassDB.can_instantiate(resource_type):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource: class cannot be "
+				+ "instantiated directly: "
+				+ resource_type
+			)
+		}
+
+	var new_resource: Variant = ClassDB.instantiate(
+		resource_type
+	)
+
+	if not (new_resource is Resource):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource: "
+				+ resource_type
+				+ " is not a Resource type."
+			)
+		}
+
+	var resource: Resource = new_resource
+
+	if FileAccess.file_exists(resource_path):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource: resource already "
+				+ "exists: "
+				+ resource_path
+				+ ". Existing resources are never "
+				+ "overwritten."
+			)
+		}
+
+	if not data.has("properties"):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource requires "
+				+ "properties."
+			)
+		}
+
+	if not (data["properties"] is Dictionary):
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource properties must "
+				+ "be an object."
+			)
+		}
+
+	var requested: Dictionary = data["properties"]
+
+	if requested.size() > MAX_SETTINGS_PER_CALL:
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource accepts at most "
+				+ str(MAX_SETTINGS_PER_CALL)
+				+ " properties per call."
+			)
+		}
+
+	# Validate and prepare all properties before applying
+	# any, mirroring set_properties.
+
+	var prepared: Array = []
+
+	for property_name in requested:
+
+		var key := str(property_name).strip_edges()
+
+		if key.is_empty():
+
+			return {
+				"success": false,
+				"error": (
+					"create_resource requires "
+					+ "non-empty property names."
+				)
+			}
+
+		# Unknown properties are rejected explicitly:
+		# Object.set() silently ignores them, which would
+		# make a "created" resource silently wrong.
+
+		if not (key in resource):
+
+			return {
+				"success": false,
+				"error": (
+					"Property not found on resource "
+					+ "type "
+					+ resource_type
+					+ ": "
+					+ key
+				)
+			}
+
+		var current_value: Variant = (
+			resource.get(key)
+		)
+
+		var type_id: int = typeof(current_value)
+
+		var deserialize_result := (
+			variant_serializer
+			.deserialize_property_value(
+				requested[property_name],
+				type_id
+			)
+		)
+
+		if not deserialize_result["success"]:
+
+			return {
+				"success": false,
+				"error": (
+					"Invalid value for property "
+					+ key
+					+ ": "
+					+ str(deserialize_result["error"])
+				)
+			}
+
+		prepared.append(
+			{
+				"key": key,
+				"value": deserialize_result["value"],
+			}
+		)
+
+	for change in prepared:
+
+		resource.set(
+			change["key"],
+			change["value"]
+		)
+
+	# Create missing parent directories, mirroring
+	# create_script.
+
+	var target_dir: String = resource_path.get_base_dir()
+
+	var needs_dir: bool = (
+		target_dir.length() > len("res://")
+		and not DirAccess.dir_exists_absolute(target_dir)
+	)
+
+	if needs_dir:
+
+		var mkdir_error := (
+			DirAccess.make_dir_recursive_absolute(
+				target_dir
+			)
+		)
+
+		if mkdir_error != OK:
+
+			return {
+				"success": false,
+				"error": (
+					"create_resource: could not "
+					+ "create directory "
+					+ target_dir
+					+ ". Error: "
+					+ error_string(mkdir_error)
+				)
+			}
+
+	var save_error := ResourceSaver.save(
+		resource,
+		resource_path
+	)
+
+	if save_error != OK:
+
+		return {
+			"success": false,
+			"error": (
+				"create_resource: could not save "
+				+ "the resource. Error: "
+				+ error_string(save_error)
+			)
+		}
+
+	# Post-create verification: load the file back and
+	# confirm the resource type.
+
+	var verify_load: Variant = load(resource_path)
+
+	var verified_write: bool = (
+		verify_load is Resource
+		and verify_load.get_class() == resource_type
+	)
+
+	return {
+		"success": true,
+		"action": "create_resource",
+		"message": (
+			"Resource created successfully in the "
+			+ "project."
+		),
+		"resource_path": resource_path,
+		"resource_type": resource_type,
+		"property_count": prepared.size(),
+		"changed": true,
+		"verified_write": verified_write,
+		"undoable": false
+	}

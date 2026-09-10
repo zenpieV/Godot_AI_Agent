@@ -39,7 +39,8 @@ with `available=False`; values are never estimated or fabricated.
 The agent records this usage in model-call telemetry, and failed
 calls are recorded with a duration and a `safe_error_message()` that
 truncates the text to 200 characters and redacts `GEMINI_API_KEY`,
-`GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `ZAI_API_KEY` values.
+`GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `ZAI_API_KEY`
+values.
 
 The provider does not execute tools, validate Godot paths, enforce batch boundaries, compact context, or perform final-answer handling. Those responsibilities remain in Python orchestration and the Godot bridge.
 

@@ -25,7 +25,11 @@ Relationship to other documents:
 
 Compiled from `agent/registry.py`, `agent/schemas.py`, `tools/scene_tools.py`,
 and `addons/Execution_Agent/bridge/ai_agent_router.gd`. The registry defines
-**56 actions**: 33 read-only, 20 mutations, 3 meta/control.
+**64 actions**: 38 read-only, 23 mutations, 3 meta/control.
+(2026-09-10 later: autonomy milestone added `run_scene`, `stop_run`,
+`get_runtime_output`, `run_scene_offline`, `open_scene`,
+`save_scene_as`, `set_project_settings`, `create_resource`, plus
+telemetry JSONL export; see `TEST_HISTORY.md`.)
 (Updated 2026-09-10: implemented since the original proposal — the signal
 batch; script tools Phase A and Phase B including `edit_script`/
 `replace_in_script`; the documentation tools `get_class_documentation`/
@@ -333,6 +337,14 @@ Notes:
   to `list_script_diagnostics`; implement whichever comes first.
 
 ## Tier 3 — Runtime and playtesting (ROADMAP Phase 10 territory)
+
+**Status: PARTIALLY IMPLEMENTED 2026-09-10** (`run_scene`,
+`stop_run`, `get_runtime_output` editor-side; `run_scene_offline`
+as the autonomous output-reading tool — see `TEST_HISTORY.md` for
+the verified built-in-capture engine limitation that shaped this
+split). Runtime scene tree, input injection, and runtime node
+state remain deferred: they require in-game instrumentation
+(an autoload probe) and their own safety design.
 
 The largest step outside the current architecture: these tools observe a
 *running game*, not the editor. Requires its own design pass (lifecycle,

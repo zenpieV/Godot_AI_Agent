@@ -9,6 +9,7 @@ var property_tools: AIAgentPropertyTools
 var editor_tools: RefCounted
 var script_tools: AIAgentScriptTools
 var scene_file_tools: AIAgentSceneFileTools
+var runtime_tools: AIAgentRuntimeTools
 
 
 func _init(
@@ -16,7 +17,8 @@ func _init(
 	p_property_tools: AIAgentPropertyTools,
 	p_editor_tools: RefCounted,
 	p_script_tools: AIAgentScriptTools,
-	p_scene_file_tools: AIAgentSceneFileTools
+	p_scene_file_tools: AIAgentSceneFileTools,
+	p_runtime_tools: AIAgentRuntimeTools
 ) -> void:
 
 	node_tools = p_node_tools
@@ -28,6 +30,8 @@ func _init(
 	script_tools = p_script_tools
 
 	scene_file_tools = p_scene_file_tools
+
+	runtime_tools = p_runtime_tools
 
 
 # ==========================================
@@ -690,6 +694,95 @@ func route_request(
 			body_text,
 			editor_tools,
 			"get_input_map_from_request"
+		)
+
+	# ======================================
+	# Routes: scene navigation
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/open_scene"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"open_scene_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/save_scene_as"
+	):
+
+		return _handle_json_route(
+			body_text,
+			scene_file_tools,
+			"save_scene_as_from_request"
+		)
+
+	# ======================================
+	# Routes: runtime (playtest loop)
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/run_scene"
+	):
+
+		return _handle_json_route(
+			body_text,
+			runtime_tools,
+			"run_scene_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/stop_run"
+	):
+
+		return _handle_json_route(
+			body_text,
+			runtime_tools,
+			"stop_run_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/get_runtime_output"
+	):
+
+		return _handle_json_route(
+			body_text,
+			runtime_tools,
+			"get_runtime_output_from_request"
+		)
+
+	# ======================================
+	# Routes: project settings and resources
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/set_project_settings"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"set_project_settings_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/create_resource"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"create_resource_from_request"
 		)
 
 	# ======================================

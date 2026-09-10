@@ -60,6 +60,17 @@ _BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
         "property_name",
         "resource_path",
     ),
+    "run_scene": ("scene_path",),
+    "stop_run": (),
+    "open_scene": ("scene_path",),
+    "save_scene_as": ("scene_path",),
+    "set_project_settings": ("settings_json",),
+    "create_resource": (
+        "resource_path",
+        "resource_type",
+        "properties_json",
+    ),
+    "run_scene_offline": ("scene_path", "timeout"),
 }
 
 # Fields identifying the RESOURCE being mutated (the "target"),
@@ -118,6 +129,23 @@ _MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     # Resource assignment mutates the node (same
     # conservatism as set_properties).
     "assign_resource_to_property": ("node_path",),
+    # Process control (run/stop) has no scene resource;
+    # exact fingerprint equivalence only (like save_scene).
+    "run_scene": (),
+    "stop_run": (),
+    # Scene navigation and save-as target the file.
+    "open_scene": ("scene_path",),
+    "save_scene_as": ("scene_path",),
+    # Project settings mutation: the fingerprint covers the
+    # exact key/value set; a skipped call blocks any other
+    # settings call until the model re-proposes it exactly.
+    "set_project_settings": (),
+    # File-backed resource creation: the mutated resource
+    # is the file.
+    "create_resource": ("resource_path",),
+    # Offline execution spawns a process; fingerprint
+    # equivalence only.
+    "run_scene_offline": (),
 }
 
 

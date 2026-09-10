@@ -31,6 +31,12 @@ from agent.schemas import (
     CreateSceneAction,
     InstantiateSceneAction,
     AssignResourceToPropertyAction,
+    RunSceneAction,
+    StopRunAction,
+    OpenSceneAction,
+    SaveSceneAsAction,
+    SetProjectSettingsAction,
+    CreateResourceAction,
 )
 
 
@@ -214,6 +220,52 @@ def _assign_resource(node_path, property_name, resource_path):
         node_path=node_path,
         property_name=property_name,
         resource_path=resource_path,
+    )
+
+
+def _run_scene(scene_path=None):
+    return RunSceneAction(
+        reason="r",
+        action="run_scene",
+        scene_path=scene_path,
+    )
+
+
+def _stop_run():
+    return StopRunAction(reason="r", action="stop_run")
+
+
+def _open_scene(scene_path):
+    return OpenSceneAction(
+        reason="r",
+        action="open_scene",
+        scene_path=scene_path,
+    )
+
+
+def _save_scene_as(scene_path):
+    return SaveSceneAsAction(
+        reason="r",
+        action="save_scene_as",
+        scene_path=scene_path,
+    )
+
+
+def _set_project_settings(settings_json):
+    return SetProjectSettingsAction(
+        reason="r",
+        action="set_project_settings",
+        settings_json=settings_json,
+    )
+
+
+def _create_resource(resource_path, resource_type, properties_json):
+    return CreateResourceAction(
+        reason="r",
+        action="create_resource",
+        resource_path=resource_path,
+        resource_type=resource_type,
+        properties_json=properties_json,
     )
 
 
@@ -895,6 +947,94 @@ def test_assign_resource_different_node_not_blocked():
     assert is_blocked is False
 
 
+def test_run_scene_fingerprint_matches_skipped():
+    skipped = _run_scene("res://scenes/a.tscn")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _run_scene("res://scenes/a.tscn")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_run_scene_different_scene_not_blocked():
+    """Target is empty (process control): only the exact
+    fingerprint blocks, and a different scene is a
+    different literal fingerprint."""
+    skipped = _run_scene("res://scenes/a.tscn")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _run_scene("res://scenes/b.tscn")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_stop_run_fingerprint_matches_skipped():
+    skipped = _stop_run()
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _stop_run()
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_open_scene_different_scene_not_blocked():
+    skipped = _open_scene("res://scenes/a.tscn")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _open_scene("res://scenes/b.tscn")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is False
+
+
+def test_save_scene_as_fingerprint_matches_skipped():
+    skipped = _save_scene_as("res://scenes/a.tscn")
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _save_scene_as("res://scenes/a.tscn")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_set_project_settings_fingerprint_matches_skipped():
+    skipped = _set_project_settings('{"a": 1}')
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _set_project_settings('{"a": 1}')
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_create_resource_different_content_BLOCKED():
+    """Same resource file, different properties: target is
+    the file."""
+    skipped = _create_resource(
+        "res://r/a.tres", "Curve", '{"_min": 0.0}'
+    )
+    blocked = _blocked_from_action(skipped, 2, 3)
+    proposed = _create_resource(
+        "res://r/a.tres", "Curve", '{"_min": 1.0}'
+    )
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+
+def test_new_batch_target_extraction():
+    assert extract_mutation_target(_run_scene()) == (
+        "run_scene",
+        (),
+    )
+    assert extract_mutation_target(_stop_run()) == (
+        "stop_run",
+        (),
+    )
+    assert extract_mutation_target(
+        _open_scene("res://a.tscn")
+    ) == ("open_scene", (("scene_path", "res://a.tscn"),))
+    assert extract_mutation_target(
+        _save_scene_as("res://a.tscn")
+    ) == ("save_scene_as", (("scene_path", "res://a.tscn"),))
+    assert extract_mutation_target(
+        _set_project_settings('{"a": 1}')
+    ) == ("set_project_settings", ())
+    assert extract_mutation_target(
+        _create_resource("res://a.tres", "Curve", "{}")
+    ) == ("create_resource", (("resource_path", "res://a.tres"),))
+
+
 def test_new_mutation_target_extraction():
     """Target extraction for the six new mutations."""
     assert extract_mutation_target(
@@ -1002,6 +1142,14 @@ if __name__ == "__main__":
     test_assign_resource_different_resource_BLOCKED()
     test_assign_resource_different_node_not_blocked()
     test_new_mutation_target_extraction()
+    test_run_scene_fingerprint_matches_skipped()
+    test_run_scene_different_scene_not_blocked()
+    test_stop_run_fingerprint_matches_skipped()
+    test_open_scene_different_scene_not_blocked()
+    test_save_scene_as_fingerprint_matches_skipped()
+    test_set_project_settings_fingerprint_matches_skipped()
+    test_create_resource_different_content_BLOCKED()
+    test_new_batch_target_extraction()
     test_add_to_group_fingerprint_matches_skipped()
     test_add_to_group_different_group_BLOCKED()
     test_add_to_group_different_node_not_blocked()

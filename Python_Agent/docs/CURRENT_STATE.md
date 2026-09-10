@@ -228,6 +228,72 @@ saved file shows the instanced child. See `docs/TEST_HISTORY.md`.
 
 ---
 
+# Autonomy Milestone: Runtime Loop, Scene Navigation, Project Configuration (2026-09-10)
+
+Eight more tools plus two agent-infrastructure features, completing
+the structurally possible tool surface (vision and editor UI remain
+out of scope). Registry grows to **64 actions** (38 read-only,
+23 mutations, 3 meta).
+
+**The playtest loop (4 tools).** `run_scene` (editor play of the
+main or a custom scene, verified via `is_playing_scene`),
+`stop_run` (idempotent stop, verified),
+`get_runtime_output` (debugger-capture buffer), and — the
+cornerstone — `run_scene_offline` (Python-side tool): runs a scene
+as a headless subprocess via the configured engine binary and
+returns exit code, stdout, stderr, and a
+`script_errors_detected` flag with a bounded timeout. The offline
+runner exists because of a verified engine limitation: Godot's
+built-in debugger consumes a game's output/error messages before
+editor debugger plugins can see them, so editor-side output
+capture is impossible; owning the subprocess makes the output
+fully readable. This closes the autonomous edit → run → fix loop.
+
+**Scene navigation and configuration (4 tools).** `open_scene`
+(edited-scene switch with an unsaved-changes guard and explicit
+context-switch warning), `save_scene_as` (new-path save-as,
+void-returning API verified by read-back), `set_project_settings`
+(1-10 typed settings per call, sensitive keys rejected, previous
+values reported for manual revert, read-back verified),
+`create_resource` (file-backed `.tres` creation with
+ClassDB-validated Resource types and explicit unknown-property
+rejection).
+
+**Agent infrastructure.** Telemetry JSONL export
+(ROADMAP Phase 5 deferred item): a terminated session persists its
+model calls, tool actions, batches, mutations, compactions, and
+summary to `logs/telemetry/<session_id>.jsonl` — best-effort,
+never breaking termination. The documented empty-input silent
+termination gap is fixed (now logged with a reason).
+
+The debugger capture (`ai_agent_debugger_capture.gd`, registered
+via `EditorPlugin.add_debugger_plugin`) buffers custom-capture
+messages per the engine limitation above and gives the plugin a
+runtime-integration point for future in-game instrumentation.
+
+Rule 12: all eight new actions follow tolerated live-validated
+schema precedents (no-field family: run_scene/stop_run;
+{scene_path} family: open_scene/save_scene_as; unique sets:
+get_runtime_output/set_project_settings/create_resource/
+run_scene_offline). No exclusions needed.
+
+Verified by: **348-passing** Python suite (+18 tests), six green
+headless harnesses (new: runtime/project/resource harness), and
+live validation on an isolated editor instance: the full
+autonomous pipeline (open scene → attach script → run → script
+self-quits), save-as, settings mutation with previous-value
+reporting, resource creation + inspection, and the offline runner
+capturing both print output and push_error backtraces from a real
+subprocess run. 
+headless harnesses (script/scene-file/property/project-inspection,
+all self-cleaning where applicable), and a 20-case live bridge
+validation on an isolated editor instance — including end-to-end
+persistence proof: create scene → instantiate into the edited
+scene → attach script → `save_scene` → `get_scene_tree_of` on the
+saved file shows the instanced child. See `docs/TEST_HISTORY.md`.
+
+---
+
 # Recent Implementation: Hardening Slice 1
 
 A minimal hardening slice has been implemented to improve agent robustness without broad refactoring.

@@ -43,6 +43,13 @@ MUTATION_ACTIONS = {
     "create_scene",
     "instantiate_scene",
     "assign_resource_to_property",
+    "run_scene",
+    "stop_run",
+    "open_scene",
+    "save_scene_as",
+    "set_project_settings",
+    "create_resource",
+    "run_scene_offline",
 }
 
 
