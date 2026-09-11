@@ -100,6 +100,9 @@ from agent.schemas import (
     SetProjectSettingsAction,
     CreateResourceAction,
     RunSceneOfflineAction,
+    ScanProjectIssuesAction,
+    RenameScriptAction,
+    FindReplaceAcrossFilesAction,
     ValidateNodeTypeAction,
 )
 
@@ -126,7 +129,11 @@ class ActionSpec:
 
 
 def _execute_get_scene_tree(decision):
-    return scene_tools.get_scene_tree()
+    return scene_tools.get_scene_tree(
+        max_depth=(
+            decision.max_depth
+        ),
+    )
 
 
 def _execute_find_nodes(decision):
@@ -216,7 +223,10 @@ def _execute_get_node_properties(decision):
     return scene_tools.get_node_properties(
         node_path=(
             decision.node_path
-        )
+        ),
+        property_names=(
+            decision.property_names
+        ),
     )
 
 
@@ -467,6 +477,12 @@ def _execute_get_script_content(decision):
         script_path=(
             decision.script_path
         ),
+        start_line=(
+            decision.start_line
+        ),
+        line_count=(
+            decision.line_count
+        ),
     )
 
 
@@ -566,6 +582,9 @@ def _execute_get_scene_tree_of(decision):
     return scene_tools.get_scene_tree_of(
         scene_path=(
             decision.scene_path
+        ),
+        max_depth=(
+            decision.max_depth
         ),
     )
 
@@ -711,6 +730,9 @@ def _execute_run_scene_offline(decision):
         timeout=(
             decision.timeout
         ),
+        max_output_chars=(
+            decision.max_output_chars
+        ),
     )
 
 
@@ -730,6 +752,48 @@ def _execute_create_resource(decision):
         ),
         properties=(
             parsed_properties
+        ),
+    )
+
+
+def _execute_scan_project_issues(decision):
+    return scene_tools.scan_project_issues(
+        prefix=(
+            decision.prefix
+        ),
+        limit=(
+            decision.limit
+        ),
+    )
+
+
+def _execute_rename_script(decision):
+    return scene_tools.rename_script(
+        script_path=(
+            decision.script_path
+        ),
+        new_script_path=(
+            decision.new_script_path
+        ),
+    )
+
+
+def _execute_find_replace_across_files(decision):
+    return scene_tools.find_replace_across_files(
+        old_string=(
+            decision.old_string
+        ),
+        new_string=(
+            decision.new_string
+        ),
+        extensions=(
+            decision.extensions
+        ),
+        prefix=(
+            decision.prefix
+        ),
+        max_files=(
+            decision.max_files
         ),
     )
 
@@ -1249,6 +1313,33 @@ _ACTION_SPECS = (
         ),
         is_mutation=True,
         handler=_execute_create_resource,
+    ),
+    ActionSpec(
+        name="scan_project_issues",
+        schema=ScanProjectIssuesAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_scan_project_issues,
+    ),
+    ActionSpec(
+        name="rename_script",
+        schema=RenameScriptAction,
+        required_fields=(
+            "script_path",
+            "new_script_path",
+        ),
+        is_mutation=True,
+        handler=_execute_rename_script,
+    ),
+    ActionSpec(
+        name="find_replace_across_files",
+        schema=FindReplaceAcrossFilesAction,
+        required_fields=(
+            "old_string",
+            "new_string",
+        ),
+        is_mutation=True,
+        handler=_execute_find_replace_across_files,
     ),
     # --- Control actions (no tool dispatch; intercepted in the
     # main loop / orchestrated by execute_batch_actions) ---

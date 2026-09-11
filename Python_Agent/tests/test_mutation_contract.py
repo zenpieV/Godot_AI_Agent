@@ -50,6 +50,8 @@ MUTATION_ACTIONS = {
     "set_project_settings",
     "create_resource",
     "run_scene_offline",
+    "rename_script",
+    "find_replace_across_files",
 }
 
 

@@ -960,3 +960,268 @@ func get_input_map_from_request(
 		"action_count": actions.size(),
 		"actions": actions,
 	}
+
+
+# ==========================================
+# scan_project_issues
+# ==========================================
+# Read-only project lint: bounded scan for
+# mechanical problems a mutation-heavy agent can
+# cause. Works headless and in the editor (plain
+# file/ResourceLoader access, no editor state).
+# Three checks per file:
+#
+# - script_parse_error: .gd fails a fresh parse
+# - scene_load_failed: .tscn does not load
+# - missing_dependency: a scene's dependency path
+#   does not exist on disk
+#
+# Bounds mirror the bounded-listing convention:
+# scan cap, walk cap, reported-issue limit, and
+# explicit total_matches/truncated so a short
+# issue list is never mistaken for a full clean
+# scan.
+
+
+const SCAN_MAX_FILES := 500
+
+const SCAN_DEFAULT_LIMIT := 50
+
+const SCAN_MAX_LIMIT := 100
+
+
+func _scan_parse_check(
+	source: String
+) -> Dictionary:
+
+	var gd := GDScript.new()
+
+	gd.source_code = source
+
+	var err := gd.reload()
+
+	if err != OK:
+
+		return {
+			"ok": false,
+			"error": error_string(err)
+		}
+
+	return {"ok": true, "error": ""}
+
+
+func scan_project_issues_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var prefix := ""
+
+	if data.has("prefix"):
+
+		if typeof(data["prefix"]) != TYPE_STRING:
+
+			return {
+				"success": false,
+				"error": (
+					"scan_project_issues prefix "
+					+ "must be a string."
+				)
+			}
+
+		prefix = (
+			str(data["prefix"])
+			.strip_edges()
+			.lstrip("/")
+			.trim_prefix("res://")
+		)
+
+		if prefix.ends_with("/"):
+			prefix = prefix.rstrip("/")
+
+	var limit_check := (
+		_validate_result_limit(
+			data.get("limit"),
+			SCAN_DEFAULT_LIMIT,
+			SCAN_MAX_LIMIT,
+			"scan_project_issues"
+		)
+	)
+
+	if not limit_check.get("ok", false):
+		return limit_check
+
+	var limit: int = limit_check["limit"]
+
+	var walk_result := (
+		_walk_project_files(prefix)
+	)
+
+	if not walk_result.get("ok", false):
+		return walk_result
+
+	var issues: Array = []
+
+	var scanned_files := 0
+
+	var reached_scan_cap := false
+
+	for file_path in walk_result["paths"]:
+
+		if scanned_files >= SCAN_MAX_FILES:
+
+			reached_scan_cap = true
+
+			break
+
+		var file_ext: String = str(
+			file_path.get_extension()
+		)
+
+		if file_ext == "gd":
+
+			scanned_files += 1
+
+			var file := FileAccess.open(
+				file_path,
+				FileAccess.READ
+			)
+
+			if file == null:
+				continue
+
+			var source := file.get_as_text()
+
+			file.close()
+
+			var parse_result := (
+				_scan_parse_check(source)
+			)
+
+			if not parse_result["ok"]:
+
+				# Double evidence before reporting: a
+				# fresh detached parse of a script
+				# whose class_name is already
+				# registered in the running editor
+				# fails spuriously (duplicate global
+				# class). The file is only reported
+				# when the editor's own authority
+				# also rejects it: load() returns
+				# null, or an uncompiled script that
+				# cannot instantiate.
+
+				var disk_load: Variant = load(
+					file_path
+				)
+
+				var editor_rejects: bool = (
+					disk_load == null
+					or (
+						disk_load is GDScript
+						and not disk_load.can_instantiate()
+					)
+				)
+
+				if not editor_rejects:
+					continue
+
+				issues.append(
+					{
+						"issue_kind": (
+							"script_parse_error"
+						),
+						"file_path": file_path,
+						"detail": parse_result["error"],
+					}
+				)
+
+		elif file_ext == "tscn":
+
+			scanned_files += 1
+
+			var packed: Variant = load(file_path)
+
+			if packed == null:
+
+				issues.append(
+					{
+						"issue_kind": (
+							"scene_load_failed"
+						),
+						"file_path": file_path,
+						"detail": (
+							"the scene file does not "
+							+ "load as a PackedScene"
+						),
+					}
+				)
+
+			else:
+
+				var dependencies: PackedStringArray = (
+					ResourceLoader.get_dependencies(
+						file_path
+					)
+				)
+
+				for dependency in dependencies:
+
+					# get_dependencies() may return
+					# uid-form strings like
+					# "uid://abc::::res://x.gd" when the
+					# referenced resource has a uid.
+					# FileAccess cannot resolve those,
+					# so the res:// path is extracted
+					# before the existence check. A
+					# dependency with no res:// part
+					# (uid-only) cannot be verified on
+					# disk and is skipped rather than
+					# falsely reported.
+
+					var dep := str(dependency)
+
+					var res_marker := dep.find(
+						"res://"
+					)
+
+					if res_marker > 0:
+						dep = dep.substr(
+							res_marker
+						)
+					elif res_marker == -1:
+						continue
+
+					if FileAccess.file_exists(dep):
+						continue
+
+					issues.append(
+						{
+							"issue_kind": (
+								"missing_dependency"
+							),
+							"file_path": file_path,
+							"detail": dep,
+						}
+					)
+
+	var total_matches := issues.size()
+
+	var truncated: bool = (
+		reached_scan_cap
+		or walk_result["truncated_walk"]
+		or total_matches > limit
+	)
+
+	return {
+		"success": true,
+		"action": "scan_project_issues",
+		"prefix": prefix,
+		"issues": issues.slice(0, limit),
+		"total_matches": total_matches,
+		"truncated": truncated,
+		"limit": limit,
+		"scanned_files": scanned_files,
+		"scan_cap": SCAN_MAX_FILES,
+		"walked_files": walk_result["walked"],
+		"walk_truncated": walk_result["truncated_walk"],
+	}

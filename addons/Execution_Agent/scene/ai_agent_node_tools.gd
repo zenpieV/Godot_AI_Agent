@@ -73,10 +73,120 @@ func get_scene_tree() -> Dictionary:
 	}
 
 
+func get_scene_tree_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	# Depth-bounded variant of get_scene_tree: with
+	# max_depth set, nodes deeper than the bound are
+	# cut and reported with children_truncated so a
+	# huge scene never floods the conversation. The
+	# caller drills into truncated nodes with
+	# get_node_children_summary.
+
+	var max_depth := 0
+
+	if data.has("max_depth") and data["max_depth"] != null:
+
+		if (
+			typeof(data["max_depth"]) != TYPE_INT
+			and typeof(data["max_depth"]) != TYPE_FLOAT
+		):
+
+			return {
+				"success": false,
+				"error": (
+					"get_scene_tree max_depth must "
+					+ "be an integer between 1 and "
+					+ "50."
+				)
+			}
+
+		max_depth = int(data["max_depth"])
+
+		if max_depth < 1 or max_depth > 50:
+
+			return {
+				"success": false,
+				"error": (
+					"get_scene_tree max_depth must "
+					+ "be an integer between 1 and "
+					+ "50."
+				)
+			}
+
+	var scene_result: Dictionary = (
+		scene_helpers
+		.get_edited_scene_root_or_error()
+	)
+
+	if not scene_result["success"]:
+		return scene_result
+
+	var edited_scene_root: Node = (
+		scene_result["scene_root"]
+	)
+
+	var tree := serialize_scene_node(
+		edited_scene_root,
+		edited_scene_root,
+		max_depth
+	)
+
+	return {
+		"success": true,
+		"action": "get_scene_tree",
+		"max_depth": max_depth,
+		"truncated": tree_has_depth_truncation(tree),
+		"scene_tree": tree
+	}
+
+
 func serialize_scene_node(
 	edited_scene_root: Node,
-	current_node: Node
+	current_node: Node,
+	max_depth: int = 0,
+	current_depth: int = 0
 ) -> Dictionary:
+
+	# With max_depth > 0 the serialization stops at
+	# that depth: deeper nodes are never visited and
+	# the cut is reported per-node with
+	# children_truncated (0 = unlimited, the
+	# historical behavior).
+
+	var children_truncated := false
+
+	if (
+		max_depth > 0
+		and current_depth >= max_depth
+	):
+
+		children_truncated = (
+			current_node.get_child_count() > 0
+		)
+
+		return {
+			"name": (
+				str(current_node.name)
+			),
+			"node_type": (
+				current_node.get_class()
+			),
+			"path": (
+				scene_helpers
+				.get_relative_node_path(
+					edited_scene_root,
+					current_node
+				)
+			),
+			"is_root": (
+				current_node
+				== edited_scene_root
+			),
+			"children": [],
+			"children_truncated": children_truncated
+		}
 
 	var children: Array = []
 
@@ -87,7 +197,9 @@ func serialize_scene_node(
 			children.append(
 				serialize_scene_node(
 					edited_scene_root,
-					child
+					child,
+					max_depth,
+					current_depth + 1
 				)
 			)
 
@@ -111,6 +223,23 @@ func serialize_scene_node(
 		),
 		"children": children
 	}
+
+
+func tree_has_depth_truncation(
+	tree: Dictionary
+) -> bool:
+
+	if tree.get("children_truncated", false):
+		return true
+
+	for child in tree.get("children", []):
+
+		if child is Dictionary:
+
+			if tree_has_depth_truncation(child):
+				return true
+
+	return false
 
 
 # ==========================================

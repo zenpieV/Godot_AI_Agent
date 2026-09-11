@@ -22,6 +22,10 @@ const SCRATCH_BAD := (
 	"res://addons/Execution_Agent/tests/scratch_script_harness_bad.gd"
 )
 
+const SCRATCH_PAGING := (
+	"res://addons/Execution_Agent/tests/scratch_paging_probe.gd"
+)
+
 const VALID_CONTENT := (
 	"extends Node\n\nvar probe_health := 10\n"
 )
@@ -86,6 +90,7 @@ func _cleanup() -> void:
 	_remove_file(SCRATCH_SCRIPT)
 	_remove_file(SCRATCH_SCRIPT_2)
 	_remove_file(SCRATCH_BAD)
+	_remove_file(SCRATCH_PAGING)
 
 
 func _attached(path: String) -> bool:
@@ -521,6 +526,98 @@ func _run_file_edit_cases() -> void:
 	assert(not serialized.is_empty())
 
 
+func _run_paging_cases() -> void:
+	# Seed a 13-line script (1: extends, 2: blank,
+	# 3..13: probes) with no trailing newline so line
+	# arithmetic is unambiguous.
+	var content := "extends Node\n\n"
+	for line_index in range(2, 13):
+		content += "var probe_line_%d := %d\n" % [line_index, line_index]
+	content = content.strip_edges(false, true)
+
+	_raw_write(SCRATCH_PAGING, content)
+
+	var total_lines := 13
+
+	# 1. Unpaged read keeps the historical shape: full
+	# source, total_lines reported.
+	var full = script_tools.get_script_content_from_request(
+		{"script_path": SCRATCH_PAGING}
+	)
+	assert(full["success"])
+	assert(full["source"] == content)
+	assert(full["total_lines"] == total_lines)
+	assert(full.get("truncated", false) == false)
+
+	# 2. Paged read returns exactly the requested lines
+	# and reports the window plus truncation.
+	var page = script_tools.get_script_content_from_request(
+		{
+			"script_path": SCRATCH_PAGING,
+			"start_line": 3,
+			"line_count": 2,
+		}
+	)
+	assert(page["success"])
+	assert(page["source"] == "var probe_line_2 := 2\nvar probe_line_3 := 3")
+	assert(page["start_line"] == 3)
+	assert(page["end_line"] == 4)
+	assert(page["total_lines"] == total_lines)
+	assert(page["truncated"] == true)
+
+	# 3. A page covering the tail is not truncated.
+	var tail = script_tools.get_script_content_from_request(
+		{
+			"script_path": SCRATCH_PAGING,
+			"start_line": 10,
+			"line_count": 500,
+		}
+	)
+	assert(tail["success"])
+	assert(tail["source"] == "var probe_line_9 := 9\nvar probe_line_10 := 10\nvar probe_line_11 := 11\nvar probe_line_12 := 12")
+	assert(tail["end_line"] == total_lines)
+	assert(tail["truncated"] == false)
+
+	# 4. A start beyond EOF is an empty page, not an error.
+	var beyond = script_tools.get_script_content_from_request(
+		{
+			"script_path": SCRATCH_PAGING,
+			"start_line": 100,
+			"line_count": 5,
+		}
+	)
+	assert(beyond["success"])
+	assert(beyond["source"] == "")
+
+	# 5. Validation: bad bounds are structured failures.
+	var bad_count = script_tools.get_script_content_from_request(
+		{
+			"script_path": SCRATCH_PAGING,
+			"start_line": 1,
+			"line_count": 501,
+		}
+	)
+	assert(bad_count["success"] == false)
+
+	var bad_start = script_tools.get_script_content_from_request(
+		{
+			"script_path": SCRATCH_PAGING,
+			"start_line": 0,
+			"line_count": 5,
+		}
+	)
+	assert(bad_start["success"] == false)
+
+	var missing_count = script_tools.get_script_content_from_request(
+		{"script_path": SCRATCH_PAGING, "start_line": 2}
+	)
+	assert(missing_count["success"] == false)
+
+	_remove_file(SCRATCH_PAGING)
+
+	print("script content paging cases passed")
+
+
 func _run_undo_capable_cases(undo_manager) -> void:
 	# 13. create_script: parse-gated write with verification.
 	var create_result = (
@@ -690,6 +787,10 @@ func _init() -> void:
 	# every run. They seed their own scratch script and clean
 	# up through _cleanup().
 	_run_file_edit_cases()
+
+	# get_script_content line paging: bounded reads for
+	# large scripts. Needs no undo manager.
+	_run_paging_cases()
 
 	# If this binary allows instantiating the editor undo
 	# manager, exercise the full create/attach/detach path,

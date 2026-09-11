@@ -70,7 +70,26 @@ _BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
         "resource_type",
         "properties_json",
     ),
-    "run_scene_offline": ("scene_path", "timeout"),
+    "run_scene_offline": ("scene_path", "timeout", "max_output_chars"),
+    # Script refactoring: the mutated resource is the script
+    # file itself; a skipped rename of a script blocks any
+    # further rename of the same source script regardless of
+    # the requested destination.
+    "rename_script": (
+        "script_path",
+        "new_script_path",
+    ),
+    # Multi-file replacement mutates the PROJECT (a set of
+    # files), not one resource; the fingerprint covers the
+    # exact request, so a skipped call blocks only an
+    # identical re-proposal (like set_project_settings).
+    "find_replace_across_files": (
+        "old_string",
+        "new_string",
+        "extensions",
+        "prefix",
+        "max_files",
+    ),
 }
 
 # Fields identifying the RESOURCE being mutated (the "target"),
@@ -146,6 +165,15 @@ _MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     # Offline execution spawns a process; fingerprint
     # equivalence only.
     "run_scene_offline": (),
+    # Script rename/move: the mutated resource is the
+    # source script file. A skipped rename of a script
+    # blocks any further rename of the same script
+    # regardless of destination.
+    "rename_script": ("script_path",),
+    # Multi-file replacement has no single target
+    # resource; exact fingerprint equivalence only
+    # (like set_project_settings).
+    "find_replace_across_files": (),
 }
 
 

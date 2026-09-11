@@ -919,6 +919,40 @@ func get_scene_tree_of_from_request(
 		path_check["scene_path"]
 	)
 
+	# Optional depth bound, identical semantics to
+	# get_scene_tree's max_depth.
+
+	var max_depth := 0
+
+	if data.has("max_depth") and data["max_depth"] != null:
+
+		if (
+			typeof(data["max_depth"]) != TYPE_INT
+			and typeof(data["max_depth"]) != TYPE_FLOAT
+		):
+
+			return {
+				"success": false,
+				"error": (
+					"get_scene_tree_of max_depth "
+					+ "must be an integer between "
+					+ "1 and 50."
+				)
+			}
+
+		max_depth = int(data["max_depth"])
+
+		if max_depth < 1 or max_depth > 50:
+
+			return {
+				"success": false,
+				"error": (
+					"get_scene_tree_of max_depth "
+					+ "must be an integer between "
+					+ "1 and 50."
+				)
+			}
+
 	var load_result := (
 		_load_packed_scene(
 			scene_path,
@@ -959,7 +993,12 @@ func get_scene_tree_of_from_request(
 
 	var serialized := node_tools.serialize_scene_node(
 		instanced,
-		instanced
+		instanced,
+		max_depth
+	)
+
+	var truncated := node_tools.tree_has_depth_truncation(
+		serialized
 	)
 
 	instanced.free()
@@ -968,6 +1007,8 @@ func get_scene_tree_of_from_request(
 		"success": true,
 		"action": "get_scene_tree_of",
 		"scene_path": scene_path,
+		"max_depth": max_depth,
+		"truncated": truncated,
 		"scene_tree": serialized,
 	}
 

@@ -87,6 +87,9 @@ from agent.schemas import (
     SetProjectSettingsAction,
     CreateResourceAction,
     RunSceneOfflineAction,
+    ScanProjectIssuesAction,
+    RenameScriptAction,
+    FindReplaceAcrossFilesAction,
     ValidateNodeTypeAction,
 )
 from tools import scene_tools
@@ -159,6 +162,9 @@ EXECUTABLE_ACTIONS = {
     "set_project_settings",
     "create_resource",
     "run_scene_offline",
+    "scan_project_issues",
+    "rename_script",
+    "find_replace_across_files",
 }
 
 MUTATION_ACTIONS = {
@@ -189,6 +195,8 @@ MUTATION_ACTIONS = {
     "set_project_settings",
     "create_resource",
     "run_scene_offline",
+    "rename_script",
+    "find_replace_across_files",
 }
 
 # The exact required-field mapping previously maintained by hand
@@ -270,6 +278,9 @@ PREVIOUS_ACTION_REQUIREMENTS = {
         "properties_json",
     ),
     "run_scene_offline": ("scene_path",),
+    "scan_project_issues": (),
+    "rename_script": ("script_path", "new_script_path"),
+    "find_replace_across_files": ("old_string", "new_string"),
     "describe_current_scene": (),
     "batch": ("actions",),
     "final_answer": ("final_answer",),
@@ -642,7 +653,13 @@ DISPATCH_CASES = [
         "get_scene_tree",
         GetSceneTreeAction(reason="r", action="get_scene_tree"),
         "get_scene_tree",
-        {},
+        {"max_depth": None},
+    ),
+    (
+        "get_scene_tree-depth",
+        GetSceneTreeAction(reason="r", action="get_scene_tree", max_depth=2),
+        "get_scene_tree",
+        {"max_depth": 2},
     ),
     (
         "find_nodes-defaults",
@@ -789,7 +806,21 @@ DISPATCH_CASES = [
             reason="r", action="get_node_properties", node_path="Player"
         ),
         "get_node_properties",
-        {"node_path": "Player"},
+        {"node_path": "Player", "property_names": None},
+    ),
+    (
+        "get_node_properties-filtered",
+        GetNodePropertiesAction(
+            reason="r",
+            action="get_node_properties",
+            node_path="Player",
+            property_names=["position", "visible"],
+        ),
+        "get_node_properties",
+        {
+            "node_path": "Player",
+            "property_names": ["position", "visible"],
+        },
     ),
     (
         "get_node_property",
@@ -1062,7 +1093,27 @@ DISPATCH_CASES = [
             script_path="res://scripts/probe.gd",
         ),
         "get_script_content",
-        {"script_path": "res://scripts/probe.gd"},
+        {
+            "script_path": "res://scripts/probe.gd",
+            "start_line": None,
+            "line_count": None,
+        },
+    ),
+    (
+        "get_script_content-paged",
+        GetScriptContentAction(
+            reason="r",
+            action="get_script_content",
+            script_path="res://scripts/probe.gd",
+            start_line=10,
+            line_count=20,
+        ),
+        "get_script_content",
+        {
+            "script_path": "res://scripts/probe.gd",
+            "start_line": 10,
+            "line_count": 20,
+        },
     ),
     (
         "list_script_diagnostics",
@@ -1157,7 +1208,10 @@ DISPATCH_CASES = [
             scene_path="res://scenes/probe.tscn",
         ),
         "get_scene_tree_of",
-        {"scene_path": "res://scenes/probe.tscn"},
+        {
+            "scene_path": "res://scenes/probe.tscn",
+            "max_depth": None,
+        },
     ),
     (
         "list_open_scenes",
@@ -1348,6 +1402,76 @@ DISPATCH_CASES = [
             "properties": {"_min": 0.0, "_max": 1.0},
         },
     ),
+    (
+        "scan_project_issues-defaults",
+        ScanProjectIssuesAction(
+            reason="r", action="scan_project_issues"
+        ),
+        "scan_project_issues",
+        {"prefix": None, "limit": None},
+    ),
+    (
+        "scan_project_issues-prefix",
+        ScanProjectIssuesAction(
+            reason="r",
+            action="scan_project_issues",
+            prefix="scripts",
+            limit=25,
+        ),
+        "scan_project_issues",
+        {"prefix": "scripts", "limit": 25},
+    ),
+    (
+        "rename_script",
+        RenameScriptAction(
+            reason="r",
+            action="rename_script",
+            script_path="res://scripts/probe.gd",
+            new_script_path="res://scripts/renamed/probe.gd",
+        ),
+        "rename_script",
+        {
+            "script_path": "res://scripts/probe.gd",
+            "new_script_path": "res://scripts/renamed/probe.gd",
+        },
+    ),
+    (
+        "find_replace_across_files-defaults",
+        FindReplaceAcrossFilesAction(
+            reason="r",
+            action="find_replace_across_files",
+            old_string="old_hp",
+            new_string="new_hp",
+        ),
+        "find_replace_across_files",
+        {
+            "old_string": "old_hp",
+            "new_string": "new_hp",
+            "extensions": None,
+            "prefix": None,
+            "max_files": None,
+        },
+    ),
+    (
+        "find_replace_across_files-scoped",
+        FindReplaceAcrossFilesAction(
+            reason="r",
+            action="find_replace_across_files",
+            old_string="old_hp",
+            new_string="new_hp",
+            extensions=["gd"],
+            prefix="scripts",
+            max_files=5,
+        ),
+        "find_replace_across_files",
+        {
+            "old_string": "old_hp",
+            "new_string": "new_hp",
+            "extensions": ["gd"],
+            "prefix": "scripts",
+            "max_files": 5,
+        },
+    ),
 ]
 
 
@@ -1392,7 +1516,9 @@ def test_offline_runner_dispatch_reaches_offline_runner_module(
 
     assert result == {"success": True, "via": "offline"}
     mock_runner.assert_called_once_with(
-        scene_path="res://scenes/probe.tscn", timeout=10
+        scene_path="res://scenes/probe.tscn",
+        timeout=10,
+        max_output_chars=None,
     )
 
 

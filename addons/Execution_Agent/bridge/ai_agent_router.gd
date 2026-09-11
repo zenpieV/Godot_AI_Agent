@@ -10,6 +10,7 @@ var editor_tools: RefCounted
 var script_tools: AIAgentScriptTools
 var scene_file_tools: AIAgentSceneFileTools
 var runtime_tools: AIAgentRuntimeTools
+var refactor_tools: RefCounted
 
 
 func _init(
@@ -18,7 +19,8 @@ func _init(
 	p_editor_tools: RefCounted,
 	p_script_tools: AIAgentScriptTools,
 	p_scene_file_tools: AIAgentSceneFileTools,
-	p_runtime_tools: AIAgentRuntimeTools
+	p_runtime_tools: AIAgentRuntimeTools,
+	p_refactor_tools: RefCounted
 ) -> void:
 
 	node_tools = p_node_tools
@@ -32,6 +34,8 @@ func _init(
 	scene_file_tools = p_scene_file_tools
 
 	runtime_tools = p_runtime_tools
+
+	refactor_tools = p_refactor_tools
 
 
 # ==========================================
@@ -71,6 +75,22 @@ func route_request(
 	):
 
 		return node_tools.get_scene_tree()
+
+	# ======================================
+	# Route: /scene_tree (depth-bounded POST
+	# variant used by the agent)
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/scene_tree"
+	):
+
+		return _handle_json_route(
+			body_text,
+			node_tools,
+			"get_scene_tree_from_request"
+		)
 
 
 	# ======================================
@@ -783,6 +803,43 @@ func route_request(
 			body_text,
 			property_tools,
 			"create_resource_from_request"
+		)
+
+	# ======================================
+	# Routes: project linting and refactoring
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/scan_project_issues"
+	):
+
+		return _handle_json_route(
+			body_text,
+			editor_tools,
+			"scan_project_issues_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/rename_script"
+	):
+
+		return _handle_json_route(
+			body_text,
+			refactor_tools,
+			"rename_script_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/find_replace_across_files"
+	):
+
+		return _handle_json_route(
+			body_text,
+			refactor_tools,
+			"find_replace_across_files_from_request"
 		)
 
 	# ======================================

@@ -2491,3 +2491,125 @@ project goals. Remaining gaps: vision (describe_current_scene),
 runtime tree/input inspection (needs in-game instrumentation),
 editor UI (user-directed), agent-triggered undo (shared undo
 stack with the human — deliberately rejected).
+
+# Lint + Refactoring + Token Compaction Batch (2026-09-11)
+
+## Scope
+
+Three batches delivered as one coherent change set, bringing the
+registry to **67 actions** (40 read-only, 24 mutations, 3 meta):
+
+1. **scan_project_issues** (read-only, editor_tools): bounded
+   project lint — script_parse_error / scene_load_failed /
+   missing_dependency, with prefix + limit bounds, scan cap 500,
+   explicit total_matches/truncated.
+2. **rename_script** + **find_replace_across_files** (mutations,
+   NEW `ai_agent_refactor_tools.gd`, fifth tool domain; router
+   and plugin wired): deterministic, parse-gated, two-phase
+   multi-file refactoring. rename_script moves the file + .uid
+   sidecar first (preload() resolves at parse time) and rewrites
+   references in .gd/.tscn/.tres/.cfg/project.godot; regression-
+   only parse gate (a file whose original content already failed
+   to parse never blocks); rollback on parse regression;
+   verifies no leftover references and reports stale live nodes
+   in the edited scene. find_replace_across_files is bounded by
+   max_files (refuses over-bound requests entirely), parse-gated
+   the same way, and verified against the exact computed
+   replacement.
+3. **Token compaction** (optional parameters, all backward
+   compatible; full fidelity retained on demand):
+   `get_script_content` start_line/line_count (1-500) with
+   total_lines/end_line/truncated; `get_scene_tree` and
+   `get_scene_tree_of` max_depth (1-50) with children_truncated
+   markers and a top-level truncated flag; `get_node_properties`
+   property_names filter (<= 50 names, missing names reported as
+   not_found); `run_scene_offline` max_output_chars (500-50000,
+   default 8000, tail-kept). Python-side conversation compaction
+   gained dedicated summaries for paged get_script_content and
+   get_node_properties results. Catalog entries 65-67 appended;
+   five existing entries amended.
+
+## Rule 12 handling
+
+AgentDecision schema changed (3 new actions + 5 optional
+parameter extensions; both unions updated). Live Gemini smoke
+(gemini-3.1-flash-lite, real AgentDecisionResponse schema after
+make_gemini_schema_compatible): 4/4 scenarios passed with zero
+400s — scan_project_issues, rename_script,
+find_replace_across_files, paged get_script_content — all
+validated through the Pydantic discriminated union with correct
+fields. (First attempt at one scenario produced search_in_files:
+correct model behavior per the catalog's "search first" advice,
+not a schema failure; the scenario was made unambiguous.)
+
+## Python tests
+
+358 passed (was 348): registry +boundary/mutation-contract
+updates for the two new mutations (rename_script target =
+script_path; find_replace_across_files = exact fingerprint only)
+and new dispatch cases including every compaction parameter.
+
+## Godot headless harness
+
+All 21 runnable harnesses green, 0 assertion failures:
+- NEW `refactor_tools_harness.gd`: rename success (reference
+  rewrite in .tscn + .gd, .uid sidecar move, verified load,
+  zero leftover refs), nested-directory move, refusal cases
+  (missing source, existing target, identical paths, wrong
+  extension), find/replace success + repeat refusal + max_files
+  refusal + parse-gate abort (nothing written) + not-found +
+  identical old/new. Harness lesson: it must never contain the
+  searchable literals it exercises (a successful find/replace
+  rewrote the harness mid-run once — markers are now assembled
+  from parts).
+- NEW `scan_project_issues_harness.gd`: structured shape,
+  parse-error detection, missing-dependency detection
+  (including a uid-form ext_resource fixture), good scene never
+  flagged, nonexistent-prefix structured failure.
+- `script_tools_harness.gd` extended: get_script_content paging
+  (exact window, tail page untruncated, beyond-EOF empty page,
+  validation failures).
+
+## Live bridge validation (isolated editor instance, port 8082)
+
+- scan_project_issues: full-project scan clean (42 files).
+- rename_script: create -> rename -> reference updated in
+  preload user script, verified_load, zero leftovers, no stale
+  scene nodes.
+- find_replace_across_files: verified replacement; not-found
+  refusal; over-bound refusal semantics confirmed headless.
+- get_script_content paging: exact windows incl. empty-line and
+  tail pages.
+- get_scene_tree max_depth=1 and get_node_properties
+  property_names verified against the opened scene.
+- get_scene_tree GET route retained; POST variant serves the
+  depth-bounded request.
+
+### Engine limitations found (three real bugs fixed during validation)
+
+1. **class_name parse false-positive**: a fresh detached
+   GDScript parse of a file whose class_name is already
+   registered in the running editor fails (duplicate global
+   class). scan_project_issues therefore reports a parse error
+   only when the editor's own load also rejects the file
+   (load() null or can_instantiate() false); find_replace/
+   rename parse gates are regression-only (original parse
+   status compared). Headless-only behavior is unaffected.
+2. **Substring verification trap**: verifying a replacement via
+   `contains(old_string)` false-alarms when new_string contains
+   old_string ("Node" -> "Node2D"); verification now compares
+   the read-back against the exact computed replacement.
+3. **uid-form dependencies**: ResourceLoader.get_dependencies()
+   returns strings like `uid://abc::::res://x.gd` that
+   FileAccess cannot resolve; the res:// part is extracted
+   before the existence check (game_scene.tscn's own godot_bridge
+   dependency was falsely flagged before the fix).
+
+## Status
+
+Confirmed working. Python: 358 passed. Headless harnesses green.
+Rule 12 live smoke passed. Live bridge cases matched the
+documented contract. The agent can now audit the project it
+mutated (lint), restructure scripts without dangling references
+(refactor), and keep large inspections out of its own context
+(compaction) — without expanding the rejected surface.

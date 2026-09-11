@@ -28,20 +28,24 @@ DEFAULT_TIMEOUT_SECONDS = 30
 
 MAX_TIMEOUT_SECONDS = 120
 
-MAX_OUTPUT_CHARS = 8000
+DEFAULT_MAX_OUTPUT_CHARS = 8000
+
+MAX_MAX_OUTPUT_CHARS = 50000
+
+MIN_MAX_OUTPUT_CHARS = 500
 
 
-def _bound_output(text):
+def _bound_output(text, max_chars):
     """Keep the tail of long output, report truncation."""
 
     if text is None:
         return "", False
 
-    if len(text) <= MAX_OUTPUT_CHARS:
+    if len(text) <= max_chars:
         return text, False
 
     return (
-        "...[truncated]...\n" + text[-MAX_OUTPUT_CHARS:],
+        "...[truncated]...\n" + text[-max_chars:],
         True,
     )
 
@@ -49,6 +53,7 @@ def _bound_output(text):
 def run_scene_offline(
     scene_path,
     timeout=None,
+    max_output_chars=None,
 ):
     """
     Run one scene headless via the configured engine
@@ -61,6 +66,11 @@ def run_scene_offline(
     stdout, and stderr are returned verbatim (bounded)
     so script errors and print output are visible to the
     agent without any editor or instrumentation.
+
+    max_output_chars bounds stdout/stderr per stream
+    (500-50000); the TAIL of long output is kept because
+    script errors appear at the end. The default is
+    8000 characters per stream.
     """
 
     if not isinstance(scene_path, str) or not scene_path.strip():
@@ -103,6 +113,29 @@ def run_scene_offline(
             }
 
         effective_timeout = timeout
+
+    effective_max_output_chars = DEFAULT_MAX_OUTPUT_CHARS
+
+    if max_output_chars is not None:
+        if (
+            not isinstance(max_output_chars, int)
+            or isinstance(max_output_chars, bool)
+            or max_output_chars < MIN_MAX_OUTPUT_CHARS
+            or max_output_chars > MAX_MAX_OUTPUT_CHARS
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "run_scene_offline max_output_chars must "
+                    "be an integer between "
+                    + str(MIN_MAX_OUTPUT_CHARS)
+                    + " and "
+                    + str(MAX_MAX_OUTPUT_CHARS)
+                    + "."
+                ),
+            }
+
+        effective_max_output_chars = max_output_chars
 
     if not GODOT_BINARY_PATH:
         return {
@@ -165,8 +198,12 @@ def run_scene_offline(
 
     duration_s = time.monotonic() - started
 
-    bounded_stdout, stdout_truncated = _bound_output(stdout)
-    bounded_stderr, stderr_truncated = _bound_output(stderr)
+    bounded_stdout, stdout_truncated = _bound_output(
+        stdout, effective_max_output_chars
+    )
+    bounded_stderr, stderr_truncated = _bound_output(
+        stderr, effective_max_output_chars
+    )
 
     return {
         "success": True,

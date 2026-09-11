@@ -37,6 +37,8 @@ from agent.schemas import (
     SaveSceneAsAction,
     SetProjectSettingsAction,
     CreateResourceAction,
+    RenameScriptAction,
+    FindReplaceAcrossFilesAction,
 )
 
 
@@ -266,6 +268,24 @@ def _create_resource(resource_path, resource_type, properties_json):
         resource_path=resource_path,
         resource_type=resource_type,
         properties_json=properties_json,
+    )
+
+
+def _rename_script(script_path, new_script_path):
+    return RenameScriptAction(
+        reason="r",
+        action="rename_script",
+        script_path=script_path,
+        new_script_path=new_script_path,
+    )
+
+
+def _find_replace(old_string, new_string):
+    return FindReplaceAcrossFilesAction(
+        reason="r",
+        action="find_replace_across_files",
+        old_string=old_string,
+        new_string=new_string,
     )
 
 
@@ -1087,6 +1107,48 @@ def test_script_mutation_target_extraction():
         (("node_path", "Player"),),
     )
 
+def test_rename_script_target_extraction():
+    """rename_script's mutation target is the source
+    script file: a skipped rename blocks any further
+    rename of the same script regardless of
+    destination."""
+    assert extract_mutation_target(
+        _rename_script("res://s/a.gd", "res://s/b.gd")
+    ) == ("rename_script", (("script_path", "res://s/a.gd"),))
+
+    skipped = _rename_script("res://s/a.gd", "res://s/b.gd")
+    blocked = _blocked_from_action(skipped, 2, 3)
+
+    proposed = _rename_script("res://s/a.gd", "res://s/c.gd")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+    different_source = _rename_script("res://s/other.gd", "res://s/b.gd")
+    is_blocked, _ = is_action_blocked(different_source, blocked)
+    assert is_blocked is False
+
+
+def test_find_replace_exact_fingerprint_only():
+    """find_replace_across_files has no single target
+    resource: exact fingerprint equivalence only. A
+    different old_string is a different request and is
+    never blocked."""
+    assert extract_mutation_target(
+        _find_replace("a", "b")
+    ) == ("find_replace_across_files", ())
+
+    skipped = _find_replace("old", "new")
+    blocked = _blocked_from_action(skipped, 2, 3)
+
+    proposed = _find_replace("old", "new")
+    is_blocked, _ = is_action_blocked(proposed, blocked)
+    assert is_blocked is True
+
+    different_request = _find_replace("other", "new")
+    is_blocked, _ = is_action_blocked(different_request, blocked)
+    assert is_blocked is False
+
+
 if __name__ == "__main__":
     test_rename_fingerprint_matches_skipped()
     test_rename_different_new_name_BLOCKED()
@@ -1156,4 +1218,6 @@ if __name__ == "__main__":
     test_remove_from_group_fingerprint_matches_skipped()
     test_remove_from_group_different_group_BLOCKED()
     test_remove_from_group_different_node_not_blocked()
+    test_rename_script_target_extraction()
+    test_find_replace_exact_fingerprint_only()
     print("All boundary enforcement tests PASSED")

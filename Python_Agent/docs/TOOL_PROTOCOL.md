@@ -1270,10 +1270,17 @@ it.
 
 ## Purpose
 
-Reads the full source of a GDScript file from the project. The
+Reads the source of a GDScript file from the project. The
 bridge reads the real file from disk; nothing is fabricated. To
 learn which script a node uses, inspect the node with
 `get_node_properties` or `find_nodes_by_script` first.
+
+Optional line paging (`start_line` 1-based, `line_count` 1-500)
+bounds large reads: a paged result reports `total_lines`,
+`start_line`, `end_line`, and `truncated` so a bounded read is
+never mistaken for the whole file. Without them the full source
+is returned (historical behavior; `total_lines` is now also
+reported).
 
 ## Request
 
@@ -1292,6 +1299,7 @@ learn which script a node uses, inspect the node with
   "action": "get_script_content",
   "script_path": "res://scripts/agent_probe.gd",
   "source": "extends Node\n\nvar probe_health := 10\n",
+  "total_lines": 4,
   "line_count": 4,
   "size_bytes": 45,
   "success": true
@@ -3739,6 +3747,123 @@ The system prompt describes `move_child` as a tool the model may use. The
 Gemini response schema now includes `MoveChildAction` as a valid branch.
 Both views are consistent. No structural exclusion of `MoveChildAction`
 from Gemini's schema remains.
+
+---
+
+# Tool: scan_project_issues
+
+## Purpose
+
+Read-only project lint: bounded scan for mechanical problems a
+mutation-heavy agent can cause. Works headless and in the editor
+(plain file/ResourceLoader access, no editor state). Three
+checks per file:
+
+- `script_parse_error`: .gd fails a fresh detached parse AND
+  the editor's own load also rejects it (a fresh parse of a
+  script whose `class_name` is already registered in the
+  running editor fails spuriously — duplicate global class —
+  so parse failure alone is never reported).
+- `scene_load_failed`: .tscn does not load as a PackedScene.
+- `missing_dependency`: a scene dependency whose res:// path
+  does not exist on disk. uid-form dependency strings like
+  `uid://abc::::res://x.gd` are normalized to their res:// path
+  first; a uid-only dependency with no res:// part cannot be
+  verified and is skipped rather than falsely reported.
+
+## Parameters
+
+- `prefix` (optional): res:// sub-path; defaults to the whole
+  project. A prefix that does not exist is a structured failure
+  (same semantics as `list_project_files`).
+- `limit` (optional, 1-100, default 50): bounds the reported
+  issue list.
+
+## Successful Result
+
+`issues` (each with `issue_kind`, `file_path`, `detail`),
+`total_matches`, `truncated`, `scanned_files`, `scan_cap` (500),
+`walked_files`, `walk_truncated`. Check `truncated` and
+`scanned_files` before assuming a short issue list means the
+whole project was scanned.
+
+Read-only; works headless and in the editor. Batchable.
+
+---
+
+# Tool: rename_script
+
+## Purpose
+
+Renames or moves an existing GDScript file and updates every
+textual reference to its res:// path across project text files
+(.gd, .tscn, .tres, .cfg, project.godot) in one deterministic
+operation. Phased: (1) compute all replacements; (2) MOVE the
+script file and its `.uid` sidecar first (GDScript `preload()`
+resolves at parse time, so the target must exist before
+parse-checking); (3) parse-gate affected .gd files
+(regression-only: a file whose ORIGINAL content already failed
+to parse is never made worse and does not block); (4) write all
+reference updates with read-back verification. On any parse
+regression the move is rolled back and nothing is written.
+
+## Parameters
+
+- `script_path` (required): existing res:// path ending in .gd.
+- `new_script_path` (required): non-existing res:// path ending
+  in .gd; missing parent directories are created.
+
+## Successful Result
+
+`old_path`, `new_path`, `changed_files` (per-file
+`replacement_count` + `verified_write`), `total_reference_updates`,
+`uid_renamed`, `verified_move`, `verified_load`,
+`remaining_old_references`,
+`verified_no_leftover_references`, and
+`edited_scene_stale_script_nodes` (live nodes in the currently
+edited scene still holding the OLD script attached — a disk
+rename does not rewire live nodes; re-attach via attach_script
+or reopen the scene). The project file walk is capped at 5000
+files; a truncated walk refuses the rename rather than renaming
+without seeing all references. `undoable: false`.
+
+---
+
+# Tool: find_replace_across_files
+
+## Purpose
+
+Replaces every occurrence of `old_string` with `new_string`
+across multiple project text files in one deterministic,
+parse-gated operation. Two-phase: all new content is computed
+and parse-gated (regression-only, same rule as `rename_script`)
+BEFORE any write; any parse regression or over-bound match set
+refuses the WHOLE request with nothing written. Verified by
+reading every file back and comparing against the exact
+computed replacement — not a substring check, which false-alarms
+when `new_string` contains `old_string` (e.g. "Node" →
+"Node2D").
+
+## Parameters
+
+- `old_string` (required, non-empty), `new_string` (required,
+  may be empty to delete occurrences; must differ from
+  `old_string`).
+- `extensions` (optional, default `["gd", "tscn", "tres"]`).
+- `prefix` (optional): res:// sub-path.
+- `max_files` (optional, 1-50, default 20): a request matching
+  more files is refused entirely, never partially applied.
+
+## Successful Result
+
+`changed_files` (per-file `replacement_count` +
+`verified_write`), `total_replacements`, `scanned_files`,
+`skipped_large_files` (files over the 1 MiB scan cap),
+`verified_no_leftover_matches`, and `open_scene_overlap` (files
+currently open in the editor — modified on disk; the editor's
+in-memory copies are not reloaded by this call). Not-found
+anywhere is a structured failure pointing at `search_in_files`.
+`undoable: false`.
 
 ---
 

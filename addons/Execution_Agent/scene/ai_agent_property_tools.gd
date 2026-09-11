@@ -63,12 +63,81 @@ func get_node_properties_from_request(
 		node_result["node"]
 	)
 
+	# Optional property-name filter: when provided
+	# (bounded, non-empty), only the named properties
+	# are reported, in the requested order, each
+	# missing name reported as not_found. This keeps
+	# large nodes from flooding the conversation when
+	# only a few values matter.
+
+	var requested_names: Array = []
+
+	if (
+		data.has("property_names")
+		and data["property_names"] != null
+	):
+
+		var raw_names = data["property_names"]
+
+		if not (raw_names is Array):
+
+			return {
+				"success": false,
+				"error": (
+					"get_node_properties "
+					+ "property_names must be a "
+					+ "list of strings."
+				)
+			}
+
+		for raw_name in raw_names:
+
+			if typeof(raw_name) != TYPE_STRING:
+
+				return {
+					"success": false,
+					"error": (
+						"get_node_properties "
+						+ "property_names must be "
+						+ "a list of strings."
+					)
+				}
+
+			var trimmed_name := str(raw_name).strip_edges()
+
+			if not trimmed_name.is_empty():
+				requested_names.append(trimmed_name)
+
+		if requested_names.size() > 50:
+
+			return {
+				"success": false,
+				"error": (
+					"get_node_properties "
+					+ "property_names accepts at "
+					+ "most 50 names."
+				)
+			}
+
+		if requested_names.is_empty():
+
+			return {
+				"success": false,
+				"error": (
+					"get_node_properties "
+					+ "property_names must not be "
+					+ "empty when provided."
+				)
+			}
+
 	var properties := []
 
 	var property_list := (
 		target_node
 		.get_property_list()
 	)
+
+	var not_found: Array = []
 
 	for property_info in property_list:
 
@@ -102,6 +171,11 @@ func get_node_properties_from_request(
 
 			continue
 
+		if not requested_names.is_empty():
+
+			if not requested_names.has(property_name):
+				continue
+
 		var current_value = (
 			target_node.get(
 				property_name
@@ -134,6 +208,22 @@ func get_node_properties_from_request(
 			}
 		)
 
+	# A requested name that no editor-visible
+	# property satisfies is reported explicitly,
+	# never silently dropped.
+
+	if not requested_names.is_empty():
+
+		var found_names: Array = []
+
+		for property_entry in properties:
+			found_names.append(property_entry["name"])
+
+		for requested_name in requested_names:
+
+			if not found_names.has(requested_name):
+				not_found.append(requested_name)
+
 	return {
 		"success": true,
 		"action": "get_node_properties",
@@ -153,7 +243,8 @@ func get_node_properties_from_request(
 		"property_count": (
 			properties.size()
 		),
-		"properties": properties
+		"properties": properties,
+		"not_found": not_found
 	}
 
 

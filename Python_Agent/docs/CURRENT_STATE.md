@@ -284,15 +284,68 @@ autonomous pipeline (open scene → attach script → run → script
 self-quits), save-as, settings mutation with previous-value
 reporting, resource creation + inspection, and the offline runner
 capturing both print output and push_error backtraces from a real
-subprocess run. 
-headless harnesses (script/scene-file/property/project-inspection,
-all self-cleaning where applicable), and a 20-case live bridge
-validation on an isolated editor instance — including end-to-end
-persistence proof: create scene → instantiate into the edited
-scene → attach script → `save_scene` → `get_scene_tree_of` on the
-saved file shows the instanced child. See `docs/TEST_HISTORY.md`.
+subprocess run.
 
 ---
+
+# Lint + Refactoring + Token Compaction Batch (2026-09-11)
+
+Three batches as one change set. Registry grows to **67 actions**
+(40 read-only, 24 mutations, 3 meta). See `docs/TEST_HISTORY.md`
+for the full verified record, including three engine quirks found
+during live validation.
+
+**Project lint (1 read-only tool).** `scan_project_issues`
+(editor tools domain): bounded scan for script_parse_error,
+scene_load_failed, and missing_dependency with prefix/limit
+bounds, a 500-file scan cap, and explicit truncated metadata.
+Parse-error reporting requires double evidence (fresh detached
+parse fails AND the editor's own load rejects the file) because
+a fresh parse of a class_name-bearing script inside the running
+editor fails spuriously on duplicate global-class registration.
+
+**Project refactoring (2 mutations, NEW fifth tool domain
+`ai_agent_refactor_tools.gd`).** `rename_script` moves a .gd
+file (+ .uid sidecar) and rewrites every textual res:// path
+reference across .gd/.tscn/.tres/.cfg/project.godot in one
+phased, parse-gated operation: references computed first, the
+file moved second (preload() resolves at parse time), affected
+scripts parse-checked third (regression-only gate), writes
+verified by read-back, rollback on any parse regression, final
+re-scan proves zero leftover references, and stale live nodes in
+the edited scene are reported. `find_replace_across_files`
+applies one exact replacement across a bounded file set
+(max_files refuses over-bound requests entirely), with the same
+regression-only parse gate and exact-computed-content read-back
+verification (not a substring check — "Node" → "Node2D" would
+false-alarm otherwise). Both are file-level operations and
+report `undoable: false`.
+
+**Token compaction (optional parameters, backward compatible).**
+`get_script_content` gained start_line/line_count paging (1-500)
+with total_lines/end_line/truncated; `get_scene_tree` and
+`get_scene_tree_of` gained max_depth (1-50) with
+children_truncated node markers and a top-level truncated flag
+(POST /scene_tree route added; GET retained);
+`get_node_properties` gained a property_names filter (≤ 50
+names, missing names reported as not_found); `run_scene_offline`
+gained max_output_chars (500-50000, default 8000, tail kept).
+Python-side conversation compaction gained dedicated summaries
+for paged script reads and filtered property reads. The design
+goal holds: bounded output never blocks reasoning, because the
+full-fidelity path remains available and the summaries say what
+to re-request.
+
+Rule 12: live Gemini smoke passed 4/4 scenarios with zero 400s
+(scan_project_issues, rename_script, find_replace_across_files,
+paged get_script_content). Verified by **358-passing** Python
+suite (+10 tests), 21 green headless harnesses (new:
+refactor_tools_harness, scan_project_issues_harness;
+script_tools_harness extended with paging cases), and live
+bridge validation on an isolated port-8082 editor instance.
+
+---
+
 
 # Recent Implementation: Hardening Slice 1
 

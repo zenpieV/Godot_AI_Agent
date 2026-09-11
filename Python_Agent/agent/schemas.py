@@ -28,6 +28,12 @@ class GetSceneTreeAction(BaseAction):
 
     action: Literal["get_scene_tree"]
 
+    max_depth: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+    )
+
 
 class FindNodesAction(BaseAction):
 
@@ -101,6 +107,8 @@ class GetNodePropertiesAction(BaseAction):
     action: Literal["get_node_properties"]
 
     node_path: str
+
+    property_names: Optional[list[str]] = None
 
 
 class GetNodePropertyAction(BaseAction):
@@ -334,6 +342,17 @@ class GetScriptContentAction(BaseAction):
 
     script_path: str
 
+    start_line: Optional[int] = Field(
+        default=None,
+        ge=1,
+    )
+
+    line_count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=500,
+    )
+
 
 class ListScriptDiagnosticsAction(BaseAction):
 
@@ -421,6 +440,12 @@ class GetSceneTreeOfAction(BaseAction):
     action: Literal["get_scene_tree_of"]
 
     scene_path: str
+
+    max_depth: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+    )
 
 
 class ListOpenScenesAction(BaseAction):
@@ -566,6 +591,63 @@ class RunSceneOfflineAction(BaseAction):
         le=120,
     )
 
+    max_output_chars: Optional[int] = Field(
+        default=None,
+        ge=500,
+        le=50000,
+    )
+
+# ==========================================
+# Project linting actions
+# ==========================================
+
+
+class ScanProjectIssuesAction(BaseAction):
+
+    action: Literal["scan_project_issues"]
+
+    prefix: Optional[str] = None
+
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+    )
+
+
+# ==========================================
+# Project refactoring actions
+# ==========================================
+
+
+class RenameScriptAction(BaseAction):
+
+    action: Literal["rename_script"]
+
+    script_path: str
+
+    new_script_path: str
+
+
+class FindReplaceAcrossFilesAction(BaseAction):
+
+    action: Literal["find_replace_across_files"]
+
+    old_string: str
+
+    new_string: str
+
+    extensions: Optional[list[str]] = None
+
+    prefix: Optional[str] = None
+
+    max_files: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+    )
+
+
 # ==========================================
 # Temporary prototype actions
 # ==========================================
@@ -655,6 +737,9 @@ BatchableAction = Annotated[
         SetProjectSettingsAction,
         CreateResourceAction,
         RunSceneOfflineAction,
+        ScanProjectIssuesAction,
+        RenameScriptAction,
+        FindReplaceAcrossFilesAction,
         DescribeCurrentSceneAction,
     ],
     Field(
@@ -770,6 +855,9 @@ AgentDecision = Annotated[
         SetProjectSettingsAction,
         CreateResourceAction,
         RunSceneOfflineAction,
+        ScanProjectIssuesAction,
+        RenameScriptAction,
+        FindReplaceAcrossFilesAction,
         DescribeCurrentSceneAction,
         BatchAction,
         FinalAnswerAction,

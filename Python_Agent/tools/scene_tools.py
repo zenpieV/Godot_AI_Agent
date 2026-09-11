@@ -104,15 +104,29 @@ def _request_json(
 # ==========================================
 
 
-def get_scene_tree():
+def get_scene_tree(
+    max_depth=None,
+):
     """
     Request scene information from the
     local Godot editor bridge.
+
+    Optional max_depth bounds how deep the
+    tree is serialized; deeper nodes are cut
+    and reported as children_truncated so a
+    huge scene never floods the context. Drill
+    into truncated nodes with
+    get_node_children_summary.
     """
+
+    payload = {
+        "max_depth": max_depth
+    }
 
     return _request_json(
         endpoint="/scene_tree",
-        method="GET"
+        method="POST",
+        payload=payload
     )
 
 
@@ -335,7 +349,8 @@ def get_undo_history_summary():
 
 
 def get_node_properties(
-    node_path
+    node_path,
+    property_names=None
 ):
     """
     Retrieve editor-visible readable properties
@@ -345,10 +360,16 @@ def get_node_properties(
     scene root.
 
     Use "." for the scene root.
+
+    Optional property_names restricts the result
+    to the named properties (each is reported as
+    not_found when absent); prefer it over a full
+    dump when only a few values matter.
     """
 
     payload = {
-        "node_path": node_path
+        "node_path": node_path,
+        "property_names": property_names
     }
 
     return _request_json(
@@ -958,19 +979,30 @@ def detach_script(
 
 
 def get_script_content(
-    script_path
+    script_path,
+    start_line=None,
+    line_count=None
 ):
     """
-    Read the full source of a GDScript file from the
+    Read the source of a GDScript file from the
     project.
 
     The result is authoritative: the bridge reads the
     real file from disk. Paths without a res:// prefix
     are normalized by prepending it.
+
+    Optional start_line and line_count page through
+    large scripts in bounded chunks (1-based, line
+    inclusive); with them the result reports
+    total_lines and truncated so a bounded read is
+    never mistaken for the whole file. Without them
+    the full source is returned.
     """
 
     payload = {
-        "script_path": script_path
+        "script_path": script_path,
+        "start_line": start_line,
+        "line_count": line_count
     }
 
     return _request_json(
@@ -1164,7 +1196,8 @@ def get_scene_dependencies(
 
 
 def get_scene_tree_of(
-    scene_path
+    scene_path,
+    max_depth=None
 ):
     """
     Serialize the node tree of any scene file in the
@@ -1172,12 +1205,16 @@ def get_scene_tree_of(
     uses the same node serialization as get_scene_tree,
     scoped to the requested file.
 
+    Optional max_depth bounds the serialization depth
+    exactly like get_scene_tree.
+
     Use this for multi-scene reasoning; the currently
     edited scene remains untouched.
     """
 
     payload = {
-        "scene_path": scene_path
+        "scene_path": scene_path,
+        "max_depth": max_depth
     }
 
     return _request_json(
@@ -1548,6 +1585,116 @@ def create_resource(
 
     return _request_json(
         endpoint="/create_resource",
+        method="POST",
+        payload=payload
+    )
+
+
+def scan_project_issues(
+    prefix=None,
+    limit=None
+):
+    """
+    Scan project files for mechanical problems and
+    report them as a bounded, structured issue list.
+
+    Checks performed:
+
+    - script_parse_error: a .gd file that fails a
+      fresh GDScript parse.
+    - scene_load_failed: a .tscn file that does not
+      load as a PackedScene.
+    - missing_dependency: a scene dependency whose
+      res:// path does not exist on disk.
+
+    Optional prefix restricts the scan to a res://
+    sub-path; limit (1-100, default 50) bounds the
+    reported issues. The result reports scanned_files,
+    total_matches and truncated so a bounded result is
+    never mistaken for a clean bill of health. Use this
+    after large refactors or before final_answer to
+    verify the project is still coherent.
+    """
+
+    payload = {
+        "prefix": prefix,
+        "limit": limit
+    }
+
+    return _request_json(
+        endpoint="/scan_project_issues",
+        method="POST",
+        payload=payload
+    )
+
+
+def rename_script(
+    script_path,
+    new_script_path
+):
+    """
+    Rename or move an existing GDScript file, updating
+    every textual reference to its res:// path across
+    project files (.gd, .tscn, .tres, .cfg, and
+    project.godot) in one deterministic operation.
+
+    Two-phase and parse-gated: new content is computed
+    and parse-checked for every affected .gd file BEFORE
+    anything is written, so a failed parse leaves every
+    file untouched. The target path must not exist; the
+    script's .uid sidecar is renamed alongside when
+    present. The result lists the changed files and
+    verifies by re-scanning for leftover references.
+    Not undoable through the editor's undo system.
+    """
+
+    payload = {
+        "script_path": script_path,
+        "new_script_path": new_script_path
+    }
+
+    return _request_json(
+        endpoint="/rename_script",
+        method="POST",
+        payload=payload
+    )
+
+
+def find_replace_across_files(
+    old_string,
+    new_string,
+    extensions=None,
+    prefix=None,
+    max_files=None
+):
+    """
+    Replace every occurrence of old_string with
+    new_string across multiple project text files in one
+    deterministic, parse-gated operation.
+
+    Files are selected by extensions (default
+    ["gd", "tscn", "tres"]) and an optional res://
+    prefix. max_files (1-50, default 20) bounds how many
+    files may be modified per call; a request whose
+    match set exceeds the bound is refused entirely
+    rather than partially applied. Affected .gd files
+    are parse-checked BEFORE any write; any parse
+    failure aborts the whole operation with nothing
+    written. The result lists each modified file with
+    its replacement count and verifies by reading the
+    files back. Not undoable.
+    """
+
+    payload = {
+        "old_string": old_string,
+        "new_string": new_string,
+        "extensions": extensions,
+        "prefix": prefix,
+        "max_files": max_files
+    }
+
+    return _request_json(
+        endpoint="/find_replace_across_files",
         method="POST",
         payload=payload
     )

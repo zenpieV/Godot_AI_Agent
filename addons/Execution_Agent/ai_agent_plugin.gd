@@ -14,6 +14,9 @@ const AIAgentSceneFileToolsScript = preload(
 const AIAgentRuntimeToolsScript = preload(
 	"res://addons/Execution_Agent/scene/ai_agent_runtime_tools.gd"
 )
+const AIAgentRefactorToolsScript = preload(
+	"res://addons/Execution_Agent/scene/ai_agent_refactor_tools.gd"
+)
 const AIAgentDebuggerCaptureScript = preload(
 	"res://addons/Execution_Agent/bridge/ai_agent_debugger_capture.gd"
 )
@@ -34,6 +37,7 @@ var editor_tools: RefCounted
 var script_tools: AIAgentScriptTools
 var scene_file_tools: AIAgentSceneFileTools
 var runtime_tools: AIAgentRuntimeTools
+var refactor_tools: RefCounted
 var debugger_capture: AIAgentDebuggerCapture
 var router: RefCounted
 var http_bridge: AIAgentHTTP
@@ -150,13 +154,19 @@ func initialize_modules() -> void:
 		debugger_capture
 	)
 
+	refactor_tools = AIAgentRefactorToolsScript.new(
+		scene_helpers,
+		get_editor_interface()
+	)
+
 	router = AIAgentRouterScript.new(
 		node_tools,
 		property_tools,
 		editor_tools,
 		script_tools,
 		scene_file_tools,
-		runtime_tools
+		runtime_tools,
+		refactor_tools
 	)
 
 	http_bridge = AIAgentHTTP.new(

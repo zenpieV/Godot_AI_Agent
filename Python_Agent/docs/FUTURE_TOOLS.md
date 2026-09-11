@@ -25,11 +25,18 @@ Relationship to other documents:
 
 Compiled from `agent/registry.py`, `agent/schemas.py`, `tools/scene_tools.py`,
 and `addons/Execution_Agent/bridge/ai_agent_router.gd`. The registry defines
-**64 actions**: 38 read-only, 23 mutations, 3 meta/control.
+**67 actions**: 40 read-only, 24 mutations, 3 meta/control.
 (2026-09-10 later: autonomy milestone added `run_scene`, `stop_run`,
 `get_runtime_output`, `run_scene_offline`, `open_scene`,
 `save_scene_as`, `set_project_settings`, `create_resource`, plus
 telemetry JSONL export; see `TEST_HISTORY.md`.)
+(2026-09-11: lint/refactor/compaction batch added `scan_project_issues`
+(read-only lint), `rename_script` and `find_replace_across_files`
+(mutations, new `ai_agent_refactor_tools.gd` domain), plus optional
+output-bounding parameters on `get_script_content` (line paging),
+`get_scene_tree`/`get_scene_tree_of` (max_depth),
+`get_node_properties` (property_names), and `run_scene_offline`
+(max_output_chars); see `TEST_HISTORY.md`.)
 (Updated 2026-09-10: implemented since the original proposal — the signal
 batch; script tools Phase A and Phase B including `edit_script`/
 `replace_in_script`; the documentation tools `get_class_documentation`/

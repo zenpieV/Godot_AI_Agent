@@ -1157,6 +1157,89 @@ func get_script_content_from_request(
 		path_check["script_path"]
 	)
 
+	# Optional line paging for large scripts: with
+	# start_line/line_count the read is bounded and
+	# the result reports total_lines and truncated
+	# so a bounded read is never mistaken for the
+	# whole file. Without them the full source is
+	# returned (the historical behavior).
+
+	var start_line := 0
+
+	var line_count := 0
+
+	if (
+		data.has("start_line")
+		and data["start_line"] != null
+	):
+
+		if (
+			typeof(data["start_line"]) != TYPE_INT
+			and typeof(data["start_line"]) != TYPE_FLOAT
+		):
+
+			return {
+				"success": false,
+				"error": (
+					"get_script_content start_line "
+					+ "must be an integer >= 1."
+				)
+			}
+
+		start_line = int(data["start_line"])
+
+		if start_line < 1:
+
+			return {
+				"success": false,
+				"error": (
+					"get_script_content start_line "
+					+ "must be an integer >= 1."
+				)
+			}
+
+	if (
+		data.has("line_count")
+		and data["line_count"] != null
+	):
+
+		if (
+			typeof(data["line_count"]) != TYPE_INT
+			and typeof(data["line_count"]) != TYPE_FLOAT
+		):
+
+			return {
+				"success": false,
+				"error": (
+					"get_script_content line_count "
+					+ "must be an integer between "
+					+ "1 and 500."
+				)
+			}
+
+		line_count = int(data["line_count"])
+
+		if line_count < 1 or line_count > 500:
+
+			return {
+				"success": false,
+				"error": (
+					"get_script_content line_count "
+					+ "must be an integer between "
+					+ "1 and 500."
+				)
+			}
+
+	if start_line > 0 and line_count == 0:
+
+		return {
+			"success": false,
+			"error": (
+				"get_script_content start_line "
+				+ "requires line_count."
+			)
+		}
+
 	var read_result := (
 		_read_script_file(
 			script_path,
@@ -1169,12 +1252,53 @@ func get_script_content_from_request(
 
 	var source: String = read_result["source"]
 
+	var total_lines := _count_lines(source)
+
+	if start_line > 0:
+
+		var lines := source.split("\n")
+
+		var slice_start: int = start_line - 1
+
+		var slice_end: int = min(
+			slice_start + line_count,
+			lines.size()
+		)
+
+		var paged_source := ""
+
+		if slice_start < lines.size():
+
+			paged_source = "\n".join(
+				lines.slice(slice_start, slice_end)
+			)
+
+		var end_line: int = (
+			slice_start + paged_source.count("\n") + 1
+			if slice_start < lines.size()
+			else slice_start
+		)
+
+		return {
+			"success": true,
+			"action": "get_script_content",
+			"script_path": script_path,
+			"source": paged_source,
+			"total_lines": total_lines,
+			"start_line": start_line,
+			"end_line": end_line,
+			"truncated": end_line < total_lines,
+			"line_count": total_lines,
+			"size_bytes": source.to_utf8_buffer().size(),
+		}
+
 	return {
 		"success": true,
 		"action": "get_script_content",
 		"script_path": script_path,
 		"source": source,
-		"line_count": _count_lines(source),
+		"total_lines": total_lines,
+		"line_count": total_lines,
 		"size_bytes": source.to_utf8_buffer().size(),
 	}
 

@@ -576,6 +576,63 @@ def summarize_tool_result(
                 )
             )
 
+    if (
+        action == "get_script_content"
+        and isinstance(
+            tool_result.get("source"),
+            str,
+        )
+        and tool_result.get("truncated") is True
+    ):
+
+        return (
+            "get_script_content succeeded. "
+            "Paged read of "
+            + str(tool_result.get("script_path", "?"))
+            + f": lines {tool_result.get('start_line', 1)}"
+            + f"-{tool_result.get('end_line', '?')} of "
+            + str(tool_result.get("total_lines", "?"))
+            + " total. The full read was already "
+            "consumed by the decision that "
+            "followed it; issue a fresh paged "
+            "call for other line ranges."
+        )
+
+    if (
+        action == "get_node_properties"
+        and isinstance(
+            tool_result.get("properties"),
+            list,
+        )
+    ):
+
+        props = tool_result["properties"]
+
+        names = [
+            str(p.get("name", "?"))
+            for p in props[:COMPACTION_SUMMARY_MAX_PATHS]
+            if isinstance(p, dict)
+        ]
+
+        truncated_note = (
+            f" (showing first {COMPACTION_SUMMARY_MAX_PATHS})"
+            if len(names) > COMPACTION_SUMMARY_MAX_PATHS
+            else ""
+        )
+
+        return (
+            "get_node_properties succeeded. "
+            "Property read of "
+            + str(tool_result.get("node_path", "?"))
+            + " was already consumed by the "
+            "decision that followed it. "
+            + str(len(props))
+            + " propert(y/ies): "
+            + ", ".join(names)
+            + truncated_note
+            + "."
+        )
+
     serialized = json.dumps(
         tool_result
     )
@@ -1729,6 +1786,14 @@ Available actions:
 Use when the user genuinely needs the full
 hierarchical structure of the current scene.
 
+Optional parameter:
+
+max_depth (1-50; when set, nodes deeper than
+this are cut and reported with
+children_truncated so a huge scene never
+floods the conversation; drill into those
+nodes with get_node_children_summary)
+
 2. find_nodes
 
 Use for targeted discovery or verification of
@@ -1763,6 +1828,13 @@ node are required.
 Required parameter:
 
 node_path
+
+Optional parameter:
+
+property_names (list; returns only the named
+properties, reporting each missing name as
+not_found - preferred over a full dump when
+only a few values matter)
 
 4. get_node_property
 
@@ -1960,14 +2032,24 @@ node_path
 
 20. get_script_content
 
-Use to read the full source of a GDScript file from the
+Use to read the source of a GDScript file from the
 project. To learn which script a node uses, inspect the
 node with get_node_properties or find_nodes_by_script
-first.
+first. For LARGE scripts, use the optional line paging
+instead of reading the whole file.
 
 Required parameter:
 
 script_path
+
+Optional parameters:
+
+start_line (1-based)
+line_count (1-500)
+
+With paging the result reports total_lines and
+truncated; combine with replace_in_script anchors to
+edit large files in bounded chunks.
 
 21. list_script_diagnostics
 
@@ -2097,6 +2179,11 @@ Serializes the node tree of any scene file in the
 project without opening it. Use for multi-scene
 reasoning; prefer get_scene_tree for the currently
 edited scene.
+
+Optional parameter:
+
+max_depth (1-50; same depth-bound semantics as
+get_scene_tree)
 
 Required parameter:
 
@@ -2298,9 +2385,12 @@ Required parameter:
 
 scene_path
 
-Optional parameter:
+Optional parameters:
 
 timeout (seconds, 1-120, default 30)
+max_output_chars (500-50000; bounds stdout and
+stderr per stream, keeping the TAIL where
+script errors appear; default 8000)
 
 48. validate_node_type
 
@@ -2610,6 +2700,76 @@ When genuinely unsure, prefer a single action over
 a batch. A batch is for mutations you already know
 are safe from current context, not a way to plan
 further ahead than you can actually verify.
+
+65. scan_project_issues
+
+Scans project files for mechanical problems and
+reports them as a bounded, structured issue list:
+script_parse_error (.gd files that fail a fresh
+parse), scene_load_failed (.tscn files that do
+not load), and missing_dependency (scene
+dependencies whose res:// path does not exist).
+Read-only and editor-independent. Use it after
+large refactors, after batch mutations, or
+before final_answer to verify the project is
+still coherent. Check total_matches, truncated,
+and scanned_files before assuming a short issue
+list means the whole project was scanned.
+
+Optional parameters:
+
+prefix (res:// sub-path; defaults to the whole
+project)
+limit (1-100, default 50)
+
+66. rename_script
+
+Renames or moves an existing GDScript file and
+updates every textual reference to its res://
+path across project files (.gd, .tscn, .tres,
+.cfg, project.godot) in one deterministic
+operation. Two-phase and parse-gated: if any
+affected .gd file would no longer parse, the
+whole operation is refused with nothing
+written. The target path must not exist; the
+.uid sidecar is renamed alongside when present.
+The result lists changed files with per-file
+reference counts and verifies by re-scanning.
+Not undoable. Prefer this over manual
+edit_script + replace_in_script chains whenever
+a script path changes.
+
+Required parameters:
+
+script_path (existing res:// path ending in .gd)
+new_script_path (non-existing res:// path ending in .gd)
+
+67. find_replace_across_files
+
+Replaces every occurrence of old_string with
+new_string across multiple project text files in
+one deterministic, parse-gated operation. Files
+are selected by extensions and an optional
+prefix; the result lists each modified file with
+its replacement count and verifies by reading
+the files back. A request matching more files
+than max_files is refused entirely, never
+partially applied; if any affected .gd file
+would no longer parse, nothing is written.
+Not undoable. Use search_in_files first to know
+what will match; use replace_in_script instead
+when a single script needs a unique-anchor edit.
+
+Required parameters:
+
+old_string (non-empty)
+new_string (may be empty to delete occurrences)
+
+Optional parameters:
+
+extensions (default ["gd", "tscn", "tres"])
+prefix (res:// sub-path)
+max_files (1-50, default 20)
 
 Important rules:
 
