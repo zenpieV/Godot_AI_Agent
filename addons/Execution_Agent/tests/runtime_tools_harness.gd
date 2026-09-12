@@ -57,7 +57,11 @@ func _remove_file(path: String) -> void:
 
 
 func _run_project_settings_cases() -> void:
-	var test_key := "agent_harness/test_setting"
+	# A KNOWN ProjectSettings key: the whitelist refuses
+	# invented keys, so the case mutates a real one and
+	# restores its default afterwards.
+	var test_key := "physics/common/physics_ticks_per_second"
+	var test_key_default := 60
 
 	# 1. Validation.
 	var missing = (
@@ -96,11 +100,20 @@ func _run_project_settings_cases() -> void:
 	assert(not sensitive["success"])
 	assert(sensitive["error"].contains("sensitive"))
 
+	# 1b. Unknown keys are refused by the whitelist.
+	var unknown_key = (
+		property_tools.set_project_settings_from_request(
+			{"settings": {"agent_harness/not_a_real_key": 1}}
+		)
+	)
+	assert(not unknown_key["success"])
+	assert(unknown_key["error"].contains("unknown setting key"))
+
 	# 2. Successful set with previous value reporting and
 	# read-back verification (the key did not exist before).
 	var set_result: Dictionary = (
 		property_tools.set_project_settings_from_request(
-			{"settings": {test_key: 42}}
+			{"settings": {test_key: 61}}
 		)
 	)
 	assert(set_result["success"])
@@ -108,16 +121,17 @@ func _run_project_settings_cases() -> void:
 	assert(set_result["changed"] == true)
 	assert(set_result["verified_settings"] == true)
 	assert(set_result["undoable"] == false)
-	assert(set_result["settings"][0]["had_previous"] == false)
+	assert(set_result["settings"][0]["had_previous"] == true)
+	assert(set_result["settings"][0]["previous_value"] == 60)
 	assert(set_result["settings"][0]["verified"] == true)
 	assert(
-		ProjectSettings.get_setting(test_key) == 42
+		ProjectSettings.get_setting(test_key) == 61
 	)
 
 	# 3. Second set reports the previous value.
 	var second: Dictionary = (
 		property_tools.set_project_settings_from_request(
-			{"settings": {test_key: 100}}
+			{"settings": {test_key: 62}}
 		)
 	)
 	assert(second["success"])
@@ -126,7 +140,7 @@ func _run_project_settings_cases() -> void:
 
 	# Cleanup: remove the harness key from the live
 	# ProjectSettings of this process.
-	ProjectSettings.clear(test_key)
+	ProjectSettings.set_setting(test_key, test_key_default)
 
 
 func _run_resource_cases() -> void:

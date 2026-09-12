@@ -178,6 +178,14 @@ func run_scene_from_request(
 
 	var scene_path: String = path_check["scene_path"]
 
+	# The capture buffer is cleared at the run boundary so
+	# get_runtime_output only ever reports THIS run's
+	# output - previous runs' entries never leak in.
+
+	if debugger_capture != null:
+
+		debugger_capture.clear_entries()
+
 	if scene_path.is_empty():
 
 		editor_interface.play_main_scene()
@@ -189,10 +197,12 @@ func run_scene_from_request(
 	# playing scene. The play request launches the game as
 	# a separate process, so a short bounded blocking wait
 	# (no frame dependency) is applied before checking.
+	# 1.5 s: long enough for process spawn here, and half
+	# of the previous editor-freeze window.
 
 	var waited_ms := 0
 
-	while waited_ms < 2000 \
+	while waited_ms < 1500 \
 			and not editor_interface.is_playing_scene():
 
 		OS.delay_msec(100)
@@ -211,12 +221,19 @@ func run_scene_from_request(
 			editor_interface.get_playing_scene()
 		)
 
+	# Success policy: an unverified run is a failure -
+	# reporting success while nothing is playing made a
+	# failed launch indistinguishable from a working one.
+
 	return {
-		"success": true,
+		"success": is_playing,
 		"action": "run_scene",
 		"message": (
 			"Game is running. Use get_runtime_output to read "
 			+ "its errors and output, and stop_run to end it."
+			if is_playing
+			else "run_scene could not verify that the "
+			+ "game started (no playing scene after 1.5 s)."
 		),
 		"requested_scene": (
 			scene_path
@@ -274,20 +291,38 @@ func stop_run_from_request(
 
 	editor_interface.stop_playing_scene()
 
+	# The stop kills a separate process asynchronously;
+	# a bounded wait mirrors run_scene so verification
+	# is meaningful instead of racing the shutdown.
+
+	var waited_ms := 0
+
+	while waited_ms < 1500 \
+			and editor_interface.is_playing_scene():
+
+		OS.delay_msec(100)
+
+		waited_ms += 100
+
 	var is_playing: bool = (
 		editor_interface.is_playing_scene()
 	)
 
+	var verified_stop: bool = is_playing == false
+
 	return {
-		"success": true,
+		"success": verified_stop,
 		"action": "stop_run",
 		"message": (
 			"Game stopped successfully."
+			if verified_stop
+			else "stop_run could not verify that "
+			+ "the game exited."
 		),
 		"stopped_scene": stopped_scene,
 		"changed": true,
 		"is_playing": is_playing,
-		"verified_stop": is_playing == false,
+		"verified_stop": verified_stop,
 		"undoable": false
 	}
 
