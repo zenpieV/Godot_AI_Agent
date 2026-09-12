@@ -1894,16 +1894,29 @@ func create_resource_from_request(
 		and verify_load.get_class() == resource_type
 	)
 
+	# Soft convention nudge: root placement is legal but
+	# usually a mistake for resources.
+
+	var root_hint: bool = (
+		resource_path.get_base_dir() == "res://"
+	)
+
 	return {
 		"success": true,
 		"action": "create_resource",
 		"message": (
 			"Resource created successfully in the "
+			+ "project. Note: file placed in the "
+			+ "project root; prefer the project's "
+			+ "folder conventions (resources/, ...)."
+			if root_hint
+			else "Resource created successfully in the "
 			+ "project."
 		),
 		"resource_path": resource_path,
 		"resource_type": resource_type,
 		"property_count": prepared.size(),
+		"root_directory_hint": root_hint,
 		"changed": true,
 		"verified_write": verified_write,
 		"undoable": false

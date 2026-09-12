@@ -23,6 +23,18 @@ MODEL_PROVIDER = "gemini"
 MAX_BATCH_SIZE = 5
 
 # ==========================================
+# Agent loop configuration
+# ==========================================
+
+# Maximum model steps (decisions) per user turn. Complex
+# tasks - building several nodes, multi-file refactors -
+# routinely need far more than the original 12; each step
+# is one model call, so this also bounds the worst-case
+# cost of a single turn.
+
+MAX_STEPS = 30
+
+# ==========================================
 # Ollama configuration
 # ==========================================
 
@@ -34,6 +46,14 @@ OLLAMA_MODEL = "qwen3-vl:4b"
 # ==========================================
 
 GEMINI_MODEL = "gemini-3.5-flash-lite"
+
+# ==========================================
+# Groq configuration
+# ==========================================
+
+GROQ_MODEL = (
+    "openai/gpt-oss-120b"
+)
 
 # ==========================================
 # OpenRouter configuration

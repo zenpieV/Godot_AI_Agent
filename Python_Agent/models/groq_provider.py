@@ -4,6 +4,8 @@ import time
 import logging
 
 from groq import Groq
+
+from config.settings import GROQ_MODEL
 from agent.telemetry import ProviderResult, normalize_usage
 
 # Import specific error types defensively - the exact class names have
@@ -24,10 +26,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
-GROQ_MODEL = (
-    "openai/gpt-oss-120b"
-)
 
 # The Groq SDK already retries automatically and honors the server's
 # Retry-After header on 429s, which is correct behavior - we don't

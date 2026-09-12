@@ -517,16 +517,29 @@ func create_scene_from_request(
 
 			check_root.free()
 
+	# Soft convention nudge: root placement is legal but
+	# usually a mistake for scenes.
+
+	var root_hint: bool = (
+		scene_path.get_base_dir() == "res://"
+	)
+
 	return {
 		"success": true,
 		"action": "create_scene",
 		"message": (
 			"Scene created successfully in the "
+			+ "project. Note: file placed in the "
+			+ "project root; prefer the project's "
+			+ "folder conventions (scenes/, ...)."
+			if root_hint
+			else "Scene created successfully in the "
 			+ "project."
 		),
 		"scene_path": scene_path,
 		"root_node_type": root_node_type,
 		"root_name": verified_root_name,
+		"root_directory_hint": root_hint,
 		"changed": true,
 		"verified_write": verified_write,
 		"undoable": false

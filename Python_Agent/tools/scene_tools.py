@@ -1,4 +1,5 @@
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -6,9 +7,15 @@ import urllib.request
 # ==========================================
 # Godot editor bridge
 # ==========================================
+# Overridable via GODOT_BRIDGE_URL so the Python
+# agent (and its UI event reporter) can target an
+# isolated editor instance during live validation
+# without code edits.
 
-
-GODOT_BRIDGE_URL = "http://127.0.0.1:8081"
+GODOT_BRIDGE_URL = os.environ.get(
+    "GODOT_BRIDGE_URL",
+    "http://127.0.0.1:8081",
+)
 
 
 # ==========================================

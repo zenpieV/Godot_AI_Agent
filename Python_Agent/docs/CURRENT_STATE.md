@@ -347,6 +347,57 @@ bridge validation on an isolated port-8082 editor instance.
 ---
 
 
+# Editor UI Phase 1: Agent Observability Panel (2026-09-11)
+
+Monitor-only bottom panel ("AI Agent", beside Output/Debugger).
+Python pushes flat agent events to `POST /agent_event`
+(`agent/ui_reporter.py`, fire-and-forget, AGENT_UI_EVENTS=0 to
+disable); the plugin's state store keeps bounded histories and
+drives the panel via signals. `GET /agent_state` is a read-only
+debug snapshot. Panel: status header (theme-colored pill,
+turn/step, elapsed, model, token totals, reserved approval slot)
++ Activity / Mutations / Answers / Metrics tabs. Hooked at every
+meaningful site in the agent loop (model calls with real usage,
+tool start/finish with verification and mutation targets,
+batches, compactions, blocked actions, errors, turn/session
+boundaries). No model-facing surface change (registry stays 67
+actions; Rule 12 not triggered). Verified: 364 Python tests,
+`agent_state_store_harness.gd`, live editor runs incl. real
+agent turns end-to-end. Revised after first hands-on use: the
+mutation ledger persists across agent processes (project-level
+audit trail), the Answers tab became a chat-LLM-style Chat view
+(user bubble, single in-place thinking line, bright answer
+bubble), the model name lost its provider prefix, and THINKING
+is an animated warm-orange pulse.
+
+**Control phase delivered**: Chat is the first tab with an
+input box that queues requests through `POST /agent_input`;
+`AGENT_INPUT_MODE=bridge python -m agent.godot_agent` runs the
+agent as a persistent process that consumes them (stdin CLI
+mode unchanged and default) — `/exit` typed in the box keeps
+its CLI meaning. The header and a new side-dock glance card
+carry a model selector (per-turn provider+model override via
+the input channel), a connection dot fed by the input-poll
+heartbeat, and token totals; the dock has an Open-panel button.
+Normalization now deterministically repairs a missing `reason`
+field (observed live with glm-4.7-flash). The right dock was
+removed per feedback; the status pill doubles as a Start
+Session button that spawns the agent process itself (its
+visible console doubles as the log), and the Chat view
+auto-scrolls. `GROQ_MODEL` now lives in settings.py like the
+other providers. Usability round: MAX_STEPS raised to 30
+(settings-owned), save_scene discipline enforced in the
+catalog (one end-of-turn save at most, never per mutation),
+create_* tools flag root-directory placement, and **Plan/Act
+modes** landed: the Plan toggle (or `/plan ` prefix on stdin)
+makes the turn planning-only - mutations are refused
+deterministically - and the agent returns its workflow via
+final_answer; the user then switches to Act to execute it.
+Remaining control work: New Session button + context meter,
+approval gates. See `docs/TEST_HISTORY.md`.
+
+---
+
 # Recent Implementation: Hardening Slice 1
 
 A minimal hardening slice has been implemented to improve agent robustness without broad refactoring.

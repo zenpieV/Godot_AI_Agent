@@ -618,6 +618,45 @@ func _run_paging_cases() -> void:
 	print("script content paging cases passed")
 
 
+func _run_root_hint_cases() -> void:
+	# 1. A script in the project root is legal but flags
+	# root_directory_hint with an explanatory message.
+	var root_probe := "res://scratch_root_probe.gd"
+
+	var root_create = script_tools.create_script_from_request(
+		{
+			"script_path": root_probe,
+			"content": VALID_CONTENT,
+		}
+	)
+	assert(root_create["success"])
+	assert(root_create["root_directory_hint"] == true)
+	assert(root_create["message"].contains("project root"))
+
+	var root_dir := DirAccess.open("res://")
+	assert(root_dir != null)
+	assert(root_dir.remove("scratch_root_probe.gd") == OK)
+	assert(not FileAccess.file_exists(root_probe))
+
+	# 2. A script inside a project folder does not flag.
+	# (Earlier cases may have left this file behind; the
+	# create-only contract would otherwise refuse it.)
+	_remove_file(SCRATCH_SCRIPT)
+
+	var nested = script_tools.create_script_from_request(
+		{
+			"script_path": SCRATCH_SCRIPT,
+			"content": VALID_CONTENT,
+		}
+	)
+	assert(nested["success"])
+	assert(nested["root_directory_hint"] == false)
+
+	_remove_file(SCRATCH_SCRIPT)
+
+	print("create_script root hint cases passed")
+
+
 func _run_undo_capable_cases(undo_manager) -> void:
 	# 13. create_script: parse-gated write with verification.
 	var create_result = (
@@ -791,6 +830,9 @@ func _init() -> void:
 	# get_script_content line paging: bounded reads for
 	# large scripts. Needs no undo manager.
 	_run_paging_cases()
+
+	# create_script root-directory convention hint.
+	_run_root_hint_cases()
 
 	# If this binary allows instantiating the editor undo
 	# manager, exercise the full create/attach/detach path,

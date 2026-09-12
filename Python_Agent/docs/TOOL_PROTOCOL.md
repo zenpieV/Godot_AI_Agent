@@ -3867,6 +3867,101 @@ anywhere is a structured failure pointing at `search_in_files`.
 
 ---
 
+---
+
+# UI Observability Routes (plugin-internal)
+
+These routes serve the agent observability UI (the "AI Agent"
+bottom panel). They are NOT model-facing actions: they appear in
+no AgentDecision schema, registry, or system prompt, and Python
+calls them fire-and-forget from `agent/ui_reporter.py`. Unknown
+event types are stored as generic rows so the two sides evolve
+independently.
+
+## POST /agent_event
+
+Pushes one flat event to the plugin's state store. Requires a
+non-empty string `event` field; anything else is a structured
+failure. Recognized event types (all fields besides `event`
+optional; `ts` unix seconds is added by the reporter):
+
+| Event | Meaning / fields |
+| --- | --- |
+| `session_started` | resets timeline/metrics/chat; `session_id`, `model`. The mutation LEDGER survives (project-level audit trail: each agent CLI process emits session_started at startup) |
+| `turn_started` | `turn`, `request_preview`, `mode` ("plan"/"act"); opens the turn's chat transcript (turn 1 announces itself at the module-level input, turns 2+ in begin_next_turn) |
+| `request_sent` | status -> thinking; `turn`, `step`, `model` |
+| `model_response` | usage + metrics only (no timeline row); `prompt_tokens`, `output_tokens`, `duration_ms` (null = unavailable, never fabricated) |
+| `thinking` | the validated decision's `reason` (<=300 chars) + `action` + usage; feeds the activity timeline AND the turn's chat thinking stream |
+| `tool_started` | `action`; `run_scene_offline` gets its own status; batch items carry `batch_index`/`batch_size` |
+| `tool_finished` | `success`, `duration_ms`, `detail`; batch fields as above; mutations carry `verification`, `undoable`, `target`, `target_path` into the ledger (create_node synthesizes its target from parent_path/node_name) |
+| `batch_started` / `batch_finished` | `batch_size`, `success` |
+| `compaction` | `original_chars`, `summary_chars` |
+| `blocked_action` / `validation_rejected` | attention rows with `action` + `reason`/`error` |
+| `error` | fatal paths; `context`, `error` |
+| `max_steps_reached` | attention row |
+| `turn_completed` | `final_answer` completes the turn's Chat transcript |
+| `session_ended` | `reason`; status -> session_ended |
+
+## GET /agent_state
+
+Read-only snapshot of the store: status, token totals, counters,
+control-channel fields, and the bounded histories (events tail
+of 50, ledger, chat turns, metrics). Used for live validation
+and debugging; the panel reads the store directly, not this
+route.
+
+## Control channel: POST/GET /agent_input (UI-only)
+
+Turns carry a user-chosen MODE: `plan` (the agent may only
+inspect and plan; mutations and file creation are refused
+deterministically before execution and the plan is returned
+via final_answer) or `act` (normal execution). The panel's
+Plan toggle sets it per submission; stdin mode accepts a
+leading `/plan ` prefix. The chat transcript tags plan turns.
+
+The panel's chat input box POSTs `{"text": "..."}` here; the
+plugin queues the newest request in a single slot (a newer
+submission displaces an older unconsumed one and the response
+reports `"queued": true`). GET /agent_input is CONSUME-ON-READ:
+the agent — running with `AGENT_INPUT_MODE=bridge` — polls it
+every ~0.4 s and receives `{"pending", "text",
+"selected_provider", "selected_model"}`. The GET doubles as the
+agent-alive heartbeat the panel's connection dot renders (green
+while polling or busy, red when the idle heartbeat goes stale,
+gray when the agent runs in classic stdin mode and never polls).
+Model selections from the panel's dropdown travel the same
+channel as `model_selected` events and apply to the NEXT turn.
+
+## Model selector (per-turn override)
+
+The panel's dropdown lists every provider's configured model
+(delivered in the `session_started` event's `available_models`
+field; the right dock was removed — the bottom panel is the
+only UI surface). A selection is stored in the plugin and picked up by the
+agent on its next input poll; `ask_model` then overrides BOTH
+provider and model for that turn (all provider adapters share
+the `(conversation, schema)` contract, so per-turn switching is
+structurally safe). `None` selection falls back to the
+configured `MODEL_PROVIDER`.
+
+## Panel (phase 1, monitor-only)
+
+The plugin registers an "AI Agent" bottom panel
+(`ui/ai_agent_panel.gd`): a header strip (status pill, turn/step,
+elapsed clock, model, token totals, reserved approval-gate slot)
+and four tabs — Activity (turn-grouped event timeline),
+Mutations (verification ledger, double-click navigates to the
+changed file when a path target exists), Chat (chat-LLM style
+per turn: user request bubble, ONE in-place dim thinking line
+showing the latest decision reason while the turn is in
+flight — removed entirely once the turn completes — then the
+bright answer bubble), Metrics (per-model-call
+token/duration table with totals). THINKING renders as a warm
+orange pulse (animated background + border); red stays reserved
+for errors. All widgets are native editor-theme widgets.
+
+---
+
 # Documentation Maintenance
 
 Update this document when:

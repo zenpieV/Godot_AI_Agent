@@ -423,16 +423,30 @@ func create_script_from_request(
 			)
 		}
 
+	# Soft convention nudge: a file in the project root
+	# is legal (bridge scripts live there) but usually a
+	# mistake; the flag lets the model course-correct.
+
+	var root_hint: bool = (
+		script_path.get_base_dir() == "res://"
+	)
+
 	return {
 		"success": true,
 		"action": "create_script",
 		"message": (
 			"Script created successfully in the "
+			+ "project. Note: file placed in the "
+			+ "project root; prefer the project's "
+			+ "folder conventions (scripts/, ...)."
+			if root_hint
+			else "Script created successfully in the "
 			+ "project."
 		),
 		"script_path": script_path,
 		"line_count": write_result["line_count"],
 		"parse_ok": true,
+		"root_directory_hint": root_hint,
 		"changed": true,
 		"verified_write": write_result["verified_write"],
 		"undoable": false

@@ -15,6 +15,7 @@ from config.settings import (
 from models.groq_provider import GROQ_MODEL
 
 import json
+import os
 import re
 import logging
 import uuid
@@ -40,6 +41,8 @@ from agent.registry import ACTION_REGISTRY
 from agent.mutation import (
     build_mutation_record,
     is_mutation_action,
+    classify_verification,
+    extract_mutation_target,
 )
 
 
@@ -676,6 +679,7 @@ def compact_conversation(
     observability=None,
     turn_number=0,
     step_number=0,
+    ui_reporter=None,
 ):
     """
     Replace only execution-result messages that are
@@ -806,6 +810,16 @@ def compact_conversation(
                 action=record["action"],
             )
 
+        if ui_reporter is not None:
+            ui_reporter.report(
+                "compaction",
+                turn=turn_number,
+                step=step_number,
+                action=record["action"],
+                original_chars=original_length,
+                summary_chars=len(new_content),
+            )
+
 
 # ==========================================
 # 2.6 Agent response normalization
@@ -878,6 +892,37 @@ def normalize_agent_response(
         return json.dumps(
             parsed
         )
+
+    # Deterministic repair: some providers occasionally
+    # omit the mandatory `reason` field on an otherwise
+    # valid decision (observed live with glm-4.7-flash).
+    # The reason is conversational context, not safety-
+    # relevant data, so a clear placeholder is injected
+    # instead of failing the whole step. Any OTHER
+    # missing field still fails strict validation.
+
+    if "action" in parsed:
+
+        raw_reason = parsed.get("reason")
+
+        reason_is_missing = (
+            raw_reason is None
+            or (
+                isinstance(raw_reason, str)
+                and not raw_reason.strip()
+            )
+        )
+
+        if reason_is_missing:
+
+            parsed["reason"] = (
+                "(no reason provided by the model)"
+            )
+
+            logger.info(
+                "Agent decision normalization: injected "
+                "placeholder for missing 'reason' field."
+            )
 
     if "parameters" not in parsed:
 
@@ -987,13 +1032,29 @@ def ask_model(
         "openrouter": (ask_openrouter, OPENROUTER_MODEL),
         "zai": (ask_zai, ZAI_MODEL),
     }
-    provider_call = providers.get(MODEL_PROVIDER)
+
+    # The panel's model selector overrides provider and
+    # model per turn; None falls back to the configured
+    # MODEL_PROVIDER and its default model.
+
+    active_provider = (
+        ACTIVE_PROVIDER
+        if ACTIVE_PROVIDER in providers
+        else MODEL_PROVIDER
+    )
+
+    provider_call = providers.get(active_provider)
+
     if provider_call is None:
         raise ValueError(
-            "Unknown model provider: " + str(MODEL_PROVIDER)
+            "Unknown model provider: " + str(active_provider)
         )
 
     provider, model = provider_call
+
+    if ACTIVE_MODEL:
+        model = ACTIVE_MODEL
+
     call_id = str(uuid.uuid4())[:8]
     started_at = time.time()
     started_monotonic = time.monotonic()
@@ -1013,7 +1074,7 @@ def ask_model(
                 call_id=call_id,
                 turn_number=turn_number,
                 step_number=step_number,
-                provider=MODEL_PROVIDER,
+                provider=active_provider,
                 model=model,
                 duration_ms=(time.monotonic() - started_monotonic) * 1000,
                 usage=TokenUsage(),
@@ -1029,7 +1090,7 @@ def ask_model(
             call_id=call_id,
             turn_number=turn_number,
             step_number=step_number,
-            provider=MODEL_PROVIDER,
+            provider=active_provider,
             model=model,
             duration_ms=duration_ms,
             usage=result.usage,
@@ -1039,7 +1100,7 @@ def ask_model(
         logger.info(
             "Model call completed: provider=%s model=%s duration=%.1fms "
             "input_tokens=%s output_tokens=%s total_tokens=%s",
-            MODEL_PROVIDER,
+            active_provider,
             model,
             duration_ms,
             result.usage.input_tokens
@@ -1080,11 +1141,32 @@ def execute_single_action(
     turn_number=0,
     step_number=0,
     model_call_id=None,
+    batch_context=None,
 ):
     started = time.monotonic()
+
+    tool_started_fields = {
+        "turn": turn_number,
+        "step": step_number,
+        "action": str(decision.action),
+    }
+
+    if batch_context is not None:
+        tool_started_fields["batch_index"] = batch_context[
+            "index"
+        ]
+        tool_started_fields["batch_size"] = batch_context[
+            "total"
+        ]
+
+    UI_REPORTER.report(
+        "tool_started",
+        **tool_started_fields,
+    )
+
     try:
         result = _execute_single_action(decision)
-    except Exception:
+    except Exception as error:
         if observability is not None:
             observability.record_tool_action(
                 turn_number=turn_number,
@@ -1094,6 +1176,17 @@ def execute_single_action(
                 duration_ms=(time.monotonic() - started) * 1000,
                 model_call_id=model_call_id,
             )
+        UI_REPORTER.report(
+            "tool_finished",
+            turn=turn_number,
+            step=step_number,
+            action=str(decision.action),
+            success=False,
+            duration_ms=round(
+                (time.monotonic() - started) * 1000, 1
+            ),
+            error=type(error).__name__,
+        )
         raise
 
     if observability is not None:
@@ -1138,6 +1231,77 @@ def execute_single_action(
                     mutation_record.verification,
                     mutation_record.undoable,
                 )
+
+    if isinstance(result, dict):
+        tool_success = bool(result.get("success"))
+        tool_error = result.get("error") or result.get(
+            "validation_error"
+        )
+        tool_detail = result.get("message") or ""
+    else:
+        tool_success = True
+        tool_error = None
+        tool_detail = ""
+
+    tool_finished_fields = {
+        "turn": turn_number,
+        "step": step_number,
+        "action": str(decision.action),
+        "success": tool_success,
+        "duration_ms": round(
+            (time.monotonic() - started) * 1000, 1
+        ),
+        "is_mutation": is_mutation_action(decision.action),
+        "detail": str(tool_detail)[:200],
+    }
+
+    if batch_context is not None:
+        tool_finished_fields["batch_index"] = batch_context[
+            "index"
+        ]
+        tool_finished_fields["batch_size"] = batch_context[
+            "total"
+        ]
+
+    if tool_error:
+        tool_finished_fields["error"] = str(tool_error)[:200]
+
+    if is_mutation_action(decision.action) and isinstance(
+        result, dict
+    ):
+        tool_finished_fields["verification"] = (
+            classify_verification(result)
+        )
+        tool_finished_fields["undoable"] = result.get(
+            "undoable"
+        )
+        target = extract_mutation_target(decision)
+        if target[1]:
+            tool_finished_fields["target"] = "; ".join(
+                f"{key}={value}"
+                for key, value in target[1]
+            )
+            if len(target[1]) == 1:
+                only_value = target[1][0][1]
+                if isinstance(only_value, str) and only_value:
+                    tool_finished_fields["target_path"] = only_value
+        elif decision.action == "create_node":
+            # create_node has no pre-existing mutation
+            # target by design, but the ledger should
+            # still show WHAT was created.
+            parent = getattr(decision, "parent_path", "")
+            name = getattr(decision, "node_name", "")
+            tool_finished_fields["target"] = (
+                f"{parent}/{name}"
+                if parent not in ("", ".")
+                else str(name)
+            )
+
+    UI_REPORTER.report(
+        "tool_finished",
+        **tool_finished_fields,
+    )
+
     return result
 
 
@@ -1314,6 +1478,10 @@ def execute_batch_actions(
                 turn_number=turn_number,
                 step_number=step_number,
                 model_call_id=model_call_id,
+                batch_context={
+                    "index": index,
+                    "total": total,
+                },
             )
         )
 
@@ -1441,6 +1609,174 @@ session_id = str(
 
 observability = SessionObservability(session_id)
 
+# UI event reporter: pushes agent-state events to the Godot
+# editor plugin's bottom panel (POST /agent_event). Strictly
+# fire-and-forget; see agent/ui_reporter.py. Referenced via the
+# module attribute at every hook site so tests can patch it.
+
+import config.settings as _ui_settings
+
+from agent.ui_reporter import UiReporter
+
+UI_REPORTER = UiReporter()
+
+_UI_MODEL_LABELS = {
+    "gemini": getattr(_ui_settings, "GEMINI_MODEL", "gemini"),
+    "groq": getattr(_ui_settings, "GROQ_MODEL", "groq"),
+    "ollama": getattr(_ui_settings, "OLLAMA_MODEL", "ollama"),
+    "openrouter": getattr(
+        _ui_settings, "OPENROUTER_MODEL", "openrouter"
+    ),
+    "zai": getattr(_ui_settings, "ZAI_MODEL", "zai"),
+}
+
+UI_MODEL_LABEL = str(
+    _UI_MODEL_LABELS.get(
+        MODEL_PROVIDER, MODEL_PROVIDER
+    )
+)
+
+# Models offered in the panel's selector: every provider's
+# configured model. The panel can switch provider+model for
+# the NEXT turn via the bridge input channel.
+
+UI_AVAILABLE_MODELS = [
+    {"provider": provider_key, "model": str(model_name)}
+    for provider_key, model_name in (
+        ("gemini", _UI_MODEL_LABELS.get("gemini")),
+        ("zai", _UI_MODEL_LABELS.get("zai")),
+        ("groq", _UI_MODEL_LABELS.get("groq")),
+        ("openrouter", _UI_MODEL_LABELS.get("openrouter")),
+        ("ollama", _UI_MODEL_LABELS.get("ollama")),
+    )
+    if model_name
+]
+
+# Per-turn provider/model override (None = use the
+# configured MODEL_PROVIDER). Applied from the panel's
+# model selector via the bridge input channel; all
+# provider adapters share the (conversation, schema)
+# contract, so switching per turn is structurally safe.
+
+ACTIVE_PROVIDER = None
+
+ACTIVE_MODEL = None
+
+_KNOWN_PROVIDERS = (
+    "gemini", "groq", "zai", "openrouter", "ollama",
+)
+
+# Input mode: "stdin" (classic CLI) or "bridge" (the Godot
+# panel's input box drives the agent; python polls
+# GET /agent_input). Selected via AGENT_INPUT_MODE.
+
+AGENT_INPUT_MODE = os.environ.get(
+    "AGENT_INPUT_MODE", "stdin"
+).strip().lower()
+
+
+def apply_ui_model_selection(
+    selected_provider,
+    selected_model,
+):
+    global ACTIVE_PROVIDER, ACTIVE_MODEL, UI_MODEL_LABEL
+
+    if selected_provider in _KNOWN_PROVIDERS:
+        ACTIVE_PROVIDER = selected_provider
+
+    if selected_model:
+        ACTIVE_MODEL = selected_model
+
+    if ACTIVE_MODEL:
+        UI_MODEL_LABEL = str(ACTIVE_MODEL)
+
+
+def read_user_request():
+    """
+    One user request as a (text, mode) tuple.
+
+    mode is "plan" or "act": the user's choice for THIS
+    turn. stdin mode parses a leading "/plan " prefix
+    (the rest is the request); bridge mode takes the mode
+    from the panel's Plan/Act toggle. Applies any model
+    selection observed in bridge mode.
+    """
+
+    if AGENT_INPUT_MODE != "bridge":
+
+        raw = input(
+            "What would you like the Godot assistant "
+            "to do? "
+        )
+
+        if raw.startswith("/plan ") or raw == "/plan":
+
+            plan_text = raw[len("/plan"):].strip()
+
+            if plan_text:
+                return plan_text, "plan"
+
+            print(
+                "Note: '/plan' needs a request after it, "
+                "e.g. '/plan add three enemy nodes'. "
+                "Running in act mode."
+            )
+
+        return raw, "act"
+
+    from agent.bridge_input import read_request
+
+    result = read_request()
+
+    apply_ui_model_selection(
+        result["selected_provider"],
+        result["selected_model"],
+    )
+
+    mode = (
+        "plan"
+        if result["mode"].strip().lower() == "plan"
+        else "act"
+    )
+
+    return result["text"], mode
+
+
+def mode_directive(mode):
+    """
+    The per-turn MODE block appended to the user turn
+    message. PLAN mode is enforced deterministically in
+    the loop: mutations and file creation are refused
+    before execution; the agent is expected to inspect,
+    reason, and return its workflow plan via final_answer.
+    """
+
+    if mode == "plan":
+
+        return (
+            "TURN MODE: PLAN.\n"
+            "In this turn you are PLANNING, not acting. "
+            "Do not attempt any mutation, file creation, "
+            "or scene change - the host will refuse them. "
+            "You MAY use read-only inspection actions to "
+            "ground the plan in real project state. When "
+            "the plan is ready, return it with "
+            "final_answer as a numbered, concrete workflow "
+            "(exact actions, paths, and values). The user "
+            "will switch to Act mode and ask you to carry "
+            "this plan out."
+        )
+
+    return "TURN MODE: ACT."
+
+
+UI_REPORTER.report(
+    "session_started",
+    session_id=session_id,
+    model=UI_MODEL_LABEL,
+    available_models=UI_AVAILABLE_MODELS,
+)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1551,10 +1887,12 @@ class AgentSession:
         logger,
         initial_request,
         observability=None,
+        initial_mode="act",
     ):
         self.conversation = conversation
         self.logger = logger
         self.current_request = initial_request
+        self.current_mode = initial_mode
         self.turn_number = 1
         self.execution_result_records = []
         self.blocked_skipped_actions: list[dict] = []
@@ -1567,6 +1905,13 @@ class AgentSession:
 
         self.closed = True
         self.turn_completed = False
+
+        UI_REPORTER.report(
+            "session_ended",
+            reason=str(reason),
+            turns_completed=self.turn_number,
+        )
+
         if self.observability is not None:
             self.summary = self.observability.get_summary(
                 turns_completed=self.turn_number,
@@ -1610,9 +1955,7 @@ class AgentSession:
     def begin_next_turn(self):
 
         try:
-            next_request = input(
-                "What would you like the Godot assistant to do? "
-            )
+            next_request, next_mode = read_user_request()
         except EOFError:
             self.terminate()
             self.logger.info(
@@ -1636,7 +1979,16 @@ class AgentSession:
             return False
 
         self.current_request = next_request
+        self.current_mode = next_mode
         self.turn_number += 1
+
+        UI_REPORTER.report(
+            "turn_started",
+            turn=self.turn_number,
+            request_preview=str(next_request)[:120],
+            mode=next_mode,
+        )
+
         self.conversation.append(
             {
                 "role": "user",
@@ -1644,6 +1996,8 @@ class AgentSession:
                     "BEGIN ACTIVE USER TURN "
                     + str(self.turn_number)
                     + ".\n"
+                    + mode_directive(next_mode)
+                    + "\n"
                     + "Previous turns are completed session history. "
                     + "Use their tool results and established entity "
                     + "references when relevant, but do not repeat or "
@@ -1718,6 +2072,12 @@ class AgentSession:
                 "Agent reached maximum step limit "
                 f"({max_steps}) without final_answer"
             )
+
+            UI_REPORTER.report(
+                "max_steps_reached",
+                turn=self.turn_number,
+                max_steps=max_steps,
+            )
             print(
                 "\nAgent stopped because it reached "
                 f"the maximum step limit of {max_steps}."
@@ -1731,13 +2091,25 @@ class AgentSession:
 # 6. Get user request
 # ==========================================
 
-user_request = input(
-    "What would you like the Godot assistant to do? "
-)
+user_request, first_turn_mode = read_user_request()
 
 
 logger.info(
-    f"User request: {user_request}"
+    f"User request: {user_request} "
+    f"(mode: {first_turn_mode})"
+)
+
+# The first turn's request comes from this module-level
+# input() (subsequent turns go through begin_next_turn,
+# which reports its own turn_started), so turn 1 must
+# announce itself here or its chat transcript and
+# timeline grouping never start.
+
+UI_REPORTER.report(
+    "turn_started",
+    turn=1,
+    request_preview=str(user_request)[:120],
+    mode=first_turn_mode,
 )
 
 
@@ -2000,6 +2372,13 @@ written to disk. Existing files are never overwritten.
 File creation is NOT undoable; the result verifies the
 write by reading the file back.
 
+FILE PLACEMENT: never dump new files into the project
+root. Match the project's folder conventions (scripts/,
+scenes/, resources/, sprites/, ...) - use
+list_project_files first if you have not seen the folder
+layout. The result flags root-directory placement with
+root_directory_hint.
+
 Required parameters:
 
 script_path (res:// path ending in .gd)
@@ -2129,9 +2508,17 @@ limit
 
 Saves the currently edited scene to its own file on
 disk. Requires the running editor. The result verifies
-that the file was written. Use it after completing
-requested mutations so the work survives the editor
-session.
+that the file was written.
+
+SAVE DISCIPLINE - do NOT call save_scene after every
+mutation. Save ONLY when one of these holds:
+
+- The user explicitly asked to save.
+- EVERY mutation the user requested in this turn is
+  complete (one single save at the end of the turn,
+  never between mutations).
+- A following action requires it (open_scene refuses
+  while the scene has unsaved changes).
 
 Required parameters: none
 
@@ -2142,6 +2529,12 @@ requested type. Existing files are never overwritten.
 The file is created on disk but NOT opened in the
 editor; opening scenes changes the edited-scene context
 and is not part of this tool.
+
+FILE PLACEMENT: use the project's folder conventions
+(scenes/ for scenes) rather than the project root; use
+list_project_files first if you have not seen the
+layout. The result flags root-directory placement with
+root_directory_hint.
 
 Required parameters:
 
@@ -2364,6 +2757,12 @@ Resource type with the given properties (same
 serialization rules as set_properties). Existing files
 are never overwritten. The result verifies by loading
 the resource back.
+
+FILE PLACEMENT: use the project's folder conventions
+(resources/, sprites/, materials/, ...) rather than the
+project root; use list_project_files first if you have
+not seen the layout. The result flags root-directory
+placement with root_directory_hint.
 
 Required parameters:
 
@@ -2773,6 +3172,15 @@ max_files (1-50, default 20)
 
 Important rules:
 
+- Each user turn carries a MODE set by the user and
+  stated in the turn message: PLAN or ACT. In PLAN
+  mode the host refuses every mutation and file
+  creation; ground your plan with read-only
+  inspections and return it via final_answer. In ACT
+  mode you execute normally (carrying out an
+  earlier plan counts). You cannot switch modes;
+  only the user can.
+
 - Choose exactly one step per response: either one
   action, or one batch.
 
@@ -2836,7 +3244,9 @@ Important rules:
     {
         "role": "user",
         "content": (
-            "USER REQUEST:\n"
+            mode_directive(first_turn_mode)
+            + "\n\n"
+            + "USER REQUEST:\n"
             + user_request
             + "\n\n"
             + "Return exactly ONE AgentDecision "
@@ -2853,6 +3263,7 @@ session = AgentSession(
     logger,
     user_request,
     observability,
+    initial_mode=first_turn_mode,
 )
 
 
@@ -2864,7 +3275,7 @@ session = AgentSession(
 execution_result_records = session.execution_result_records
 blocked_skipped_actions = session.blocked_skipped_actions
 
-MAX_STEPS = 12
+MAX_STEPS = _ui_settings.MAX_STEPS
 
 
 executed_tool_actions_this_turn = 0
@@ -2888,6 +3299,13 @@ for step in session.iter_steps(
 
     try:
 
+        UI_REPORTER.report(
+            "request_sent",
+            turn=session.turn_number,
+            step=step + 1,
+            model=UI_MODEL_LABEL,
+        )
+
         raw_response = ask_model(
             conversation,
             observability=observability,
@@ -2899,6 +3317,40 @@ for step in session.iter_steps(
             observability.model_calls[-1].call_id
             if observability.model_calls
             else None
+        )
+
+        last_call = (
+            observability.model_calls[-1]
+            if observability.model_calls
+            else None
+        )
+
+        model_response_fields = {
+            "turn": session.turn_number,
+            "step": step + 1,
+            "model": (
+                last_call.model if last_call else UI_MODEL_LABEL
+            ),
+            "duration_ms": round(
+                last_call.duration_ms, 1
+            )
+            if last_call
+            else None,
+            "prompt_tokens": (
+                last_call.usage.input_tokens
+                if last_call and last_call.usage.available
+                else None
+            ),
+            "output_tokens": (
+                last_call.usage.output_tokens
+                if last_call and last_call.usage.available
+                else None
+            ),
+        }
+
+        UI_REPORTER.report(
+            "model_response",
+            **model_response_fields,
         )
 
     except Exception as e:
@@ -2920,6 +3372,12 @@ for step in session.iter_steps(
 
         print(
             f"\nAgent session {session_id} failed."
+        )
+
+        UI_REPORTER.report(
+            "error",
+            context="model_call",
+            error=safe_error_message(e)[:200],
         )
 
         session.terminate("model_call_failed")
@@ -2981,6 +3439,12 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        UI_REPORTER.report(
+            "error",
+            context="response_normalization",
+            error=str(e)[:200],
+        )
+
         session.terminate("response_normalization_failed")
         break
 
@@ -3016,6 +3480,12 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        UI_REPORTER.report(
+            "error",
+            context="decision_validation",
+            error=str(e)[:200],
+        )
+
         session.terminate("decision_validation_failed")
         break
 
@@ -3040,6 +3510,12 @@ for step in session.iter_steps(
             f"\nAgent session {session_id} failed."
         )
 
+        UI_REPORTER.report(
+            "error",
+            context="response_validation",
+            error=f"{type(e).__name__}: {str(e)}"[:200],
+        )
+
         session.terminate("response_validation_failed")
         break
 
@@ -3060,6 +3536,14 @@ for step in session.iter_steps(
     )
 
     if not action_is_valid:
+
+        UI_REPORTER.report(
+            "validation_rejected",
+            turn=session.turn_number,
+            step=step + 1,
+            action=str(decision.action),
+            error=str(validation_error)[:200],
+        )
 
         observability.record_tool_action(
             turn_number=session.turn_number,
@@ -3145,9 +3629,24 @@ for step in session.iter_steps(
             observability=observability,
             turn_number=session.turn_number,
             step_number=step + 1,
+            ui_reporter=UI_REPORTER,
         )
 
         continue
+
+    UI_REPORTER.report(
+        "thinking",
+        turn=session.turn_number,
+        step=step + 1,
+        action=str(decision.action),
+        reason=str(decision.reason)[:300],
+        prompt_tokens=last_call.usage.input_tokens
+        if last_call and last_call.usage.available
+        else None,
+        output_tokens=last_call.usage.output_tokens
+        if last_call and last_call.usage.available
+        else None,
+    )
 
     print(
         "\nAgent decision:"
@@ -3156,6 +3655,144 @@ for step in session.iter_steps(
     print(
         decision
     )
+
+    # ----------------------------------------------------------
+    # PLAN MODE: when the user launched this turn in plan
+    # mode, mutations and file creation are refused here,
+    # deterministically, before any execution. Read-only
+    # inspections are allowed (planning should be grounded
+    # in real state); the expected turn outcome is a
+    # workflow plan via final_answer.
+    # ----------------------------------------------------------
+
+    if (
+        session.current_mode == "plan"
+        and decision.action != "final_answer"
+        and decision.action != "exit_session"
+    ):
+
+        if decision.action == "batch":
+
+            plan_mode_violation = any(
+                is_mutation_action(sub_action.action)
+                for sub_action in decision.actions
+            )
+
+        else:
+
+            plan_mode_violation = is_mutation_action(
+                decision.action
+            )
+
+        if plan_mode_violation:
+
+            observability.record_tool_action(
+                turn_number=session.turn_number,
+                step_number=step + 1,
+                action=decision.action,
+                success=False,
+                duration_ms=0.0,
+                model_call_id=model_call_id,
+            )
+
+            UI_REPORTER.report(
+                "attention",
+                turn=session.turn_number,
+                step=step + 1,
+                kind="plan_mode_refusal",
+                detail=(
+                    "Refused "
+                    + str(decision.action)
+                    + ": mutations are not allowed in "
+                    + "Plan mode."
+                )[:200],
+            )
+
+            print(
+                "\nPLAN MODE REFUSAL: "
+                + str(decision.action)
+                + " mutates the project and cannot run "
+                + "while the user is in Plan mode."
+            )
+
+            plan_mode_result = {
+                "success": False,
+                "action": (
+                    decision.action
+                ),
+                "error": (
+                    "Plan mode is active: this action "
+                    "mutates the project and was not "
+                    "executed. Use read-only inspection "
+                    "actions to ground your reasoning and "
+                    "return your complete workflow plan "
+                    "with final_answer. The user will "
+                    "switch to Act mode to execute it."
+                ),
+                "plan_mode": True,
+                "message": (
+                    "The proposed agent action was not "
+                    "executed. Return one corrected next "
+                    "AgentDecision based on this "
+                    "execution result."
+                ),
+            }
+
+            conversation.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        decision.model_dump_json()
+                    ),
+                }
+            )
+
+            conversation.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "AGENT EXECUTION RESULT FOR "
+                        "THE PREVIOUS STEP:\n"
+                        + json.dumps(
+                            plan_mode_result
+                        )
+                        + "\n\n"
+                        + "The previous step was not "
+                        + "executed successfully. "
+                        + "Return exactly ONE corrected "
+                        + "AgentDecision JSON object for "
+                        + "the next step: either one "
+                        + "action, or one bounded batch."
+                    ),
+                }
+            )
+
+            execution_result_records.append(
+                {
+                    "step": step + 1,
+                    "action": decision.action,
+                    "conversation_index": (
+                        len(
+                            conversation
+                        )
+                        - 1
+                    ),
+                    "tool_result": None,
+                    "compacted": False,
+                }
+            )
+
+            compact_conversation(
+                conversation,
+                execution_result_records,
+                logger,
+                observability=observability,
+                turn_number=session.turn_number,
+                step_number=step + 1,
+                ui_reporter=UI_REPORTER,
+            )
+
+            continue
 
     if (
         decision.action
@@ -3173,6 +3810,12 @@ for step in session.iter_steps(
         logger.info(
             f"Agent session {session_id} "
             f"completed user turn: {session.current_request}"
+        )
+
+        UI_REPORTER.report(
+            "turn_completed",
+            turn=session.turn_number,
+            final_answer=str(decision.final_answer),
         )
 
         session.complete_turn(decision)
@@ -3194,6 +3837,17 @@ for step in session.iter_steps(
                 "executed tool action in the current turn. "
                 "Summary: %s",
                 decision.exit_summary,
+            )
+
+            UI_REPORTER.report(
+                "attention",
+                turn=session.turn_number,
+                step=step + 1,
+                kind="premature_exit_blocked",
+                detail=(
+                    "exit_session blocked: no tool action "
+                    "executed this turn."
+                )[:200],
             )
 
             print(
@@ -3269,6 +3923,7 @@ for step in session.iter_steps(
                 observability=observability,
                 turn_number=session.turn_number,
                 step_number=step + 1,
+                ui_reporter=UI_REPORTER,
             )
 
             continue
@@ -3324,6 +3979,14 @@ for step in session.iter_steps(
             blocked_reason,
         )
 
+        UI_REPORTER.report(
+            "blocked_action",
+            turn=session.turn_number,
+            step=step + 1,
+            action=str(decision.action),
+            reason=str(blocked_reason)[:200],
+        )
+
         print(
             "\nBATCH EXECUTION BOUNDARY: "
             + blocked_reason
@@ -3351,6 +4014,13 @@ for step in session.iter_steps(
         == "batch"
     ):
 
+        UI_REPORTER.report(
+            "batch_started",
+            turn=session.turn_number,
+            step=step + 1,
+            batch_size=len(decision.actions),
+        )
+
         tool_result = (
             execute_batch_actions(
                 decision,
@@ -3364,6 +4034,18 @@ for step in session.iter_steps(
         )
 
         executed_tool_actions_this_turn += 1
+
+        UI_REPORTER.report(
+            "batch_finished",
+            turn=session.turn_number,
+            step=step + 1,
+            batch_size=len(decision.actions),
+            success=bool(
+                tool_result.get("success")
+            )
+            if isinstance(tool_result, dict)
+            else False,
+        )
 
     else:
 
@@ -3576,6 +4258,7 @@ for step in session.iter_steps(
         observability=observability,
         turn_number=session.turn_number,
         step_number=step + 1,
+        ui_reporter=UI_REPORTER,
     )
 
 else:

@@ -1937,6 +1937,47 @@ def test_project_inspection_bridge_success_and_failure_passthrough(
     mock_tool.assert_has_calls([call(), call()])
 
 
+def test_missing_reason_normalized_to_placeholder(agent_module):
+    """Some providers omit the mandatory reason field on an
+    otherwise valid decision (observed live with
+    glm-4.7-flash). Normalization injects a deterministic
+    placeholder; everything else still validates strictly."""
+    normalized = agent_module.normalize_agent_response(
+        json.dumps(
+            {
+                "action": "final_answer",
+                "final_answer": "Yes, I can hear you.",
+            }
+        )
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        normalized
+    )
+
+    assert decision.action == "final_answer"
+    assert decision.final_answer == "Yes, I can hear you."
+    assert decision.reason == "(no reason provided by the model)"
+
+
+def test_blank_reason_normalized_to_placeholder(agent_module):
+    normalized = agent_module.normalize_agent_response(
+        json.dumps(
+            {
+                "action": "get_scene_tree",
+                "reason": "   ",
+            }
+        )
+    )
+
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        normalized
+    )
+
+    assert decision.action == "get_scene_tree"
+    assert decision.reason == "(no reason provided by the model)"
+
+
 def test_nested_parameters_normalize_then_validate(agent_module):
     normalized = agent_module.normalize_agent_response(
         json.dumps(

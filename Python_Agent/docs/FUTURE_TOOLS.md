@@ -37,6 +37,12 @@ output-bounding parameters on `get_script_content` (line paging),
 `get_scene_tree`/`get_scene_tree_of` (max_depth),
 `get_node_properties` (property_names), and `run_scene_offline`
 (max_output_chars); see `TEST_HISTORY.md`.)
+(2026-09-11 later: editor UI phase 1 started — the "AI Agent"
+bottom panel (monitor-only) fed by `POST /agent_event` events
+from Python's `agent/ui_reporter.py`; no model-facing actions
+added. The control phase (input box, New Session button,
+context meter) and approval gates are future phases requiring
+the persistent-service refactor of godot_agent.py.)
 (Updated 2026-09-10: implemented since the original proposal — the signal
 batch; script tools Phase A and Phase B including `edit_script`/
 `replace_in_script`; the documentation tools `get_class_documentation`/

@@ -2613,3 +2613,362 @@ documented contract. The agent can now audit the project it
 mutated (lint), restructure scripts without dangling references
 (refactor), and keep large inspections out of its own context
 (compaction) — without expanding the rejected surface.
+
+# Editor UI Phase 1: Agent Observability Bottom Panel (2026-09-11)
+
+## Scope
+
+Phase 1 of ROADMAP Phase 9 (editor UI), monitor-only: the plugin
+now registers an "AI Agent" bottom panel beside Output/Debugger.
+No agent controls, no AgentDecision change (Rule 12 not
+triggered), registry unchanged at 67 actions.
+
+**Data path (reverse push).** Python's `agent/ui_reporter.py`
+posts flat events to the new bridge route `POST /agent_event`
+(fire-and-forget, 1 s timeout, all errors swallowed, disable via
+AGENT_UI_EVENTS=0). The plugin's new state store
+(`ui/ai_agent_state_store.gd`, sixth tool-adjacent domain)
+applies them, keeps bounded rings (500 events / 200 ledger / 200
+metrics / 50 answers), and notifies the panel via signals.
+`GET /agent_state` exposes a read-only snapshot for validation.
+Hook sites in `godot_agent.py`: session start/terminate,
+begin_next_turn (turn_started), around `ask_model`
+(request_sent / model_response with real usage from
+observability), execute_single_action (tool_started/tool_finished
+with duration, verification, undoable, mutation target, incl.
+batch items), batch start/finish, compaction (new optional
+`ui_reporter` param on compact_conversation, all three call
+sites), blocked actions, validation rejections, the four fatal
+error paths, max-steps, turn_completed, and the premature
+exit_session guard. `GODOT_BRIDGE_URL` is now env-overridable in
+scene_tools (single source for tool calls and UI events).
+
+**Panel.** Header strip: status pill (editor-theme
+success/warning/error/accent colors), status detail, turn/step,
+elapsed clock, model label, token totals, and a reserved
+"approval gates: off" slot for the control phase. Four tabs:
+Activity (turn-grouped timeline: steps, decisions, tool results
+with verification/duration, compactions, blocked rows),
+Mutations (ledger with verification coloring, undoable vs
+file-level, double-click navigates the FileSystem dock to the
+changed file), Answers (per-turn final answers), Metrics
+(per-call prompt/output/duration table + totals).
+
+## Tests
+
+Python 364 passed (+6: reporter payload shape, disabled no-op,
+network-failure swallowing, shared bridge URL, env disable,
+constructor URL override). Headless harness
+`agent_state_store_harness.gd` covers the full status lifecycle,
+run_scene_offline's distinct status, ledger/answers/metrics
+accumulation, ring bounds (600 events -> capped 500), unknown
+event tolerance, usage-unavailable accounting, snapshot shape,
+and the two router routes including malformed rejections. The
+panel script is construct-checked against a live store.
+
+## Live validation (isolated editor instance, port 8082)
+
+- Plugin loads with the panel registered; zero script errors.
+- Scripted event sequence via curl: status transitions
+  (ready -> thinking -> executing -> completed), token totals,
+  ledger entry with verification + target_path, answer stored,
+  malformed event rejected.
+- REAL end-to-end: one agent turn run against the copy with
+  GODOT_BRIDGE_URL=http://127.0.0.1:8082 (2 model calls,
+  12,891 in / 129 out tokens) — the store received the full
+  timeline (steps, decisions with per-call tokens, count_nodes
+  with 32 ms duration, answer) and /agent_state reported
+  status completed.
+
+### Bugs found and fixed during validation
+
+1. `TabContainer.add_tab()` does not exist in 4.7 — tabs are
+   added as children then titled by index (the panel assumed a
+   newer API; caught by the live editor load).
+2. JSON numbers arrive as floats in GDScript: turn numbers in
+   event summaries displayed as "Turn 1.0"; now coerced to int
+   in the store.
+
+### Known limitation
+
+Piped-stdin agent runs raise RuntimeError (PEP 479) at EOF
+because `input()`'s StopIteration escapes the `iter_steps`
+generator; interactive EOF raises EOFError properly. Test-
+artifact only; not a product path.
+
+## Status
+
+Confirmed working. Python: 364 passed. Harnesses green. Live
+bridge: panel loaded, event pipeline and real agent turn
+verified end-to-end. Next UI phases: dock card + toasts
+(phase 2), control phase (input box, New Session, context
+meter — requires the service refactor), approval gates
+(phase 3).
+
+## Phase 1 revision round (2026-09-11, zenpieV feedback)
+
+Five changes after zenpieV's first hands-on session:
+
+1. **Mutations ledger completeness (the reported bug).** The
+   batch path was verified correct end-to-end (a real
+   batch-of-3 create_node run put all 3 in the ledger), but
+   two real defects were found and fixed around it:
+   (a) `session_started` reset the ENTIRE store, and each
+   agent CLI process emits session_started at startup — so
+   mutations from earlier agent runs silently vanished. The
+   ledger is now a project-level audit trail that survives
+   session_started (timeline/metrics/chat still reset); the
+   store only rolls it over at the 200-entry cap.
+   (b) create_node rows had an empty Target column (its
+   mutation-target is empty by design), making rows
+   indistinguishable; the reporter now synthesizes the
+   target from parent_path/node_name. Batch items also carry
+   batch_index/batch_size on tool_started/tool_finished.
+2. **Model name**: the provider prefix ("gemini:...") was
+   dropped; the header shows the plain model name.
+3. **Chat tab (chat-LLM layout, ahead of the input box).**
+   The Answers tab became Chat: per turn a user-request
+   bubble (accent-tinted), the model's reasons as a dim
+   thinking stream, then the answer bubble once the turn
+   completes. Backed by a new chat_turns transcript in the
+   store; the new `thinking` event (fired once the decision
+   is fully validated, carrying reason + action + usage)
+   feeds both the chat stream and the activity timeline,
+   replacing the token-only model_response row. Turn 1 now
+   announces itself (its request came from a module-level
+   input() that never emitted turn_started — its thinking
+   and answer were previously dropped from the transcript).
+4. **THINKING status color + animation**: warm orange pulse
+   (background lerps between two orange tones with a
+   matching soft border, ~2.6 rad/s); red is reserved for
+   errors; executing/offline stay accent-blue.
+5. Verified live on the isolated 8082 instance with two
+   real agent turns (batch-of-3 create_node + a count
+   turn): ledger 2 create_node entries with targets across
+   a later single-session run, both chat turns complete
+   with reasons and answers, plain model name, zero editor
+   script errors. Python: 364 passed; store harness extended
+   (thinking/chat/persistent-ledger/batch-field cases).
+
+6. **Chat rendering refinement (second round of zenpieV
+   feedback).** The per-turn thinking stream collapsed from
+   an accumulating list to ONE in-place dim line whose text
+   is the latest decision reason (each new reason replaces
+   the previous, chat-LLM style); when the turn completes
+   the thinking line is removed entirely and only the
+   bright answer bubble remains (explicit bright
+   default_color on the RichTextLabel). Store change:
+   chat thinking is a single overwritten string, cleared on
+   turn_completed. Verified by harness assertions
+   (overwrite + cleared-on-completion) and a scripted live
+   sequence: in-flight turn shows the single line, the
+   completed turn shows only the answer.
+
+# Mode Button Restyle (2026-09-12, zenpieV feedback)
+
+The Chat input's mode control is now a two-state display
+button instead of a plain toggle: it always shows the
+CURRENT mode as its text - "Plan" on an orange fill
+(matching the THINKING pulse family) or "Act" on a fixed
+blue - and clicking switches to the other mode. User chat
+bubbles mirror the same pair (orange tint for plan turns,
+blue tint for act turns) so bubble and button colors agree.
+
+Two follow-up fixes from zenpieV's hover test, both
+theme-related and worth remembering:
+
+1. A TOGGLED-ON button that is hovered draws its
+   `hover_pressed` stylebox, NOT `hover` - not overriding
+   `hover_pressed` made the Plan state fall back to the
+   theme's grey default on hover ("color completely
+   removed"). The fix overrides every toggle state:
+   normal/hover/pressed/hover_pressed/disabled, with
+   focus as a border-only box on top.
+2. The user's editor theme renders `accent_color` RED
+   (same reason THINKING previously looked red), so Act's
+   blue must be a fixed constant, not the theme accent.
+   `MODE_COLOR_PLAN`/`MODE_COLOR_ACT` are now the single
+   source for the button and the chat bubbles.
+
+Verified: editor loads with zero script errors.
+
+
+
+The Chat input's mode control is now a two-state display
+button instead of a plain toggle: it always shows the
+CURRENT mode as its text - "Plan" on an orange fill
+(matching the THINKING pulse family) or "Act" on the editor
+accent blue - and clicking switches to the other mode.
+User chat bubbles mirror the same pair (orange tint for
+plan turns, blue accent tint for act turns) so bubble and
+button colors agree. Submitted requests carry the visible
+mode as before. Verified: editor loads with zero script
+errors.
+
+
+
+Four fixes from hands-on use:
+
+1. **MAX_STEPS 12 -> 30**, now owned by `config/settings.py`
+   (complex multi-node tasks routinely exceeded the old
+   per-turn cap).
+2. **save_scene discipline**: the catalog entry now forbids
+   saving after each mutation - save only when the user
+   asks, as ONE save at the end of a turn whose mutations
+   are all complete, or when a following action requires
+   it. Live validation: a 3-create_node turn produced
+   exactly one end-of-turn save (previously one per
+   mutation).
+3. **File placement**: `create_script`/`create_scene`/
+   `create_resource` results now carry a
+   `root_directory_hint` flag plus an explanatory message
+   when the file lands in the project root (legal - bridge
+   scripts live there - but flagged so the model
+   course-corrects), and the catalog instructs matching the
+   project's folder conventions via list_project_files.
+4. **Plan/Act modes**: each turn carries a user-chosen mode.
+   Bridge mode: the panel's Plan toggle rides the input
+   queue (`POST /agent_input {"text", "mode"}`); stdin mode:
+   a leading `/plan ` prefix. `mode_directive()` injects the
+   per-turn instruction block into the turn message, and
+   the loop REFUSES mutations deterministically in plan
+   mode (single actions AND batches containing any
+   mutation): structured refusal + conversation feedback +
+   plan_mode_refusal UI event, never executed. Read-only
+   inspections stay allowed; the expected plan-turn outcome
+   is the workflow via final_answer. The Chat transcript
+   tags plan turns (amber bubble + PLAN tag). The user
+   switches to Act and asks the agent to carry the plan
+   out; the plan persists in conversation history.
+
+Validation (isolated editor + bridge-mode agent): plan turn
+(0 mutations, concrete workflow as final_answer) followed by
+an act turn that executed exactly that plan - 3 create_node
+mutations, all verified, one end-of-turn save. Note: the
+throwaway copies inherit zenpieV's in-progress scene whose
+referenced scripts are mid-rename, so validation used a
+minimal self-contained probe scene. Python 375 passed (+7:
+mode parsing, mode directives, violation semantics,
+MAX_STEPS settings ownership); store harness covers mode
+through the queue and chat.
+
+
+
+Four changes after hands-on use of the control phase:
+
+1. **Right side dock removed entirely** (file deleted,
+   plugin wiring reverted) — the bottom panel is the only
+   UI surface.
+2. **The status pill is now a Button that acts as Start
+   Session** while no agent process is running: it spawns
+   the agent itself via `OS.create_process` running
+   `cmd /c "cd /d <res://Python_Agent> && py -m agent.godot_agent"`
+   with `AGENT_INPUT_MODE=bridge` and the matching
+   `GODOT_BRIDGE_URL` in the inherited environment. The
+   button shows STARTING... until the agent's
+   session_started event lands (30 s retry timeout, spawn
+   failure flips to needs_attention). While a session is
+   live the same button is a plain status display
+   (disabled). 4.7 note: `OS.create_process` has no
+   console-hiding flag, so the agent runs in a visible
+   console window that doubles as its live log; closing
+   that window terminates the agent. Manual terminal
+   launches keep working identically.
+3. **Chat auto-scroll**: after every chat rebuild the
+   scrollbar pins to the bottom one frame later (await
+   process_frame; guarded for the not-in-tree setup path,
+   which errored once in the live editor and is now
+   guarded), so the thinking line and new answers are
+   always visible.
+4. **GROQ_MODEL moved to config/settings.py** (matching
+   the other providers; groq_provider imports it), so the
+   UI model list shows `openai/gpt-oss-120b (groq)`
+   instead of the bare "groq" fallback.
+
+Validation: editor loads with zero script errors; the exact
+spawn command verified against a throwaway editor (with a
+full Python_Agent copy) — session started, agent connected,
+one turn consumed from the input queue and completed with
+an answer in the Chat transcript. Python 366 passed; store
+harness green.
+
+
+
+## Scope
+
+- **Chat input box (control phase)**: Chat is now the FIRST
+  tab with an input bar (LineEdit + Send, Enter submits).
+  Submissions POST to the new `POST /agent_input` route into a
+  single-slot queue (newest wins; `queued` flag reports
+  displacement; text restored to the box on transport failure).
+  New `agent/bridge_input.py`: with `AGENT_INPUT_MODE=bridge`,
+  `godot_agent`'s input indirection (`read_user_request()`)
+  polls `GET /agent_input` (consume-on-read) instead of stdin —
+  the agent becomes a persistent process; stdin CLI mode stays
+  the default and is untouched (`/exit` typed in the panel
+  keeps its CLI meaning via the same text path).
+- **Model selector**: header + dock dropdown listing every
+  provider's configured model (delivered in the
+  `session_started` `available_models` field). Selections
+  travel as `model_selected` events and apply to the NEXT
+  turn: `ask_model` overrides BOTH provider and model via
+  `ACTIVE_PROVIDER`/`ACTIVE_MODEL` (all adapters share the
+  `(conversation, schema)` contract). Telemetry records and
+  request_sent/model_response events carry the active model.
+- **Side dock glance card** (`ui/ai_agent_dock.gd`,
+  DOCK_SLOT_RIGHT_UL): compact mirror of the header (status
+  pill with the same THINKING pulse, turn/step, model
+  selector, token totals, latest activity line, connection
+  dot) plus an Open-panel button wired to the
+  add_control_to_bottom_panel toggle. Read-only by design;
+  shares the panel's state store instance.
+- **Connection dot**: `GET /agent_input` polls double as the
+  agent-alive heartbeat (last_input_poll_ms). Green while
+  polling, green while a turn is in flight (busy means the
+  agent legitimately stopped polling — a real fix found
+  during live validation), red when the idle heartbeat goes
+  stale (>2.5 s), gray when the agent never polls (stdin
+  mode). Port unification: the bridge port is a single
+  BRIDGE_PORT constant in the plugin, flowed to the store so
+  panel/dock POSTs can never drift from the server.
+
+## Robustness fix found live
+
+glm-4.7-flash returned a valid decision WITHOUT the mandatory
+`reason` field, failing validation and terminating the session.
+`normalize_agent_response` now deterministically injects a
+placeholder ("(no reason provided by the model)") when `reason`
+is missing/blank on a decision dict; every other missing field
+still fails strict validation. Covered by two new unit tests.
+
+## Tests
+
+Python: 366 passed (+2 normalization-repair tests). Store
+harness extended: input validation, consume-on-read
+semantics, displacement flag, model_selected handling,
+available_models delivery, selection persistence across
+session_started, heartbeat/connected states.
+
+## Live validation (isolated editor instance, port 8082)
+
+- Agent launched with AGENT_INPUT_MODE=bridge (via
+  `python -m agent.godot_agent`; direct-script invocation
+  cannot resolve package imports — launch from Python_Agent).
+- Turn driven entirely from the control channel: curl POST
+  /agent_input -> agent consumed it, turn ran (thinking
+  stream visible in chat, heartbeat connected while idle
+  AND while busy), final answer in the Chat transcript.
+- Provider switch proven live: model_selected
+  (zai/glm-4.7-flash) + new turn -> log shows
+  `provider=zai model=glm-4.7-flash`; one attempt hit a Z.ai
+  429 (honest model_call_failed path), the retry succeeded
+  and exercised the missing-reason repair end-to-end
+  (placeholder injected, turn completed with the answer).
+- Editor plugin loads with panel + dock, zero script errors.
+
+## Status
+
+Confirmed working. Python: 366 passed. The panel is now the
+primary control surface; the CLI remains for stdin workflows.
+Remaining control work: New Session button + context meter
+(quota/context growth), approval gates.

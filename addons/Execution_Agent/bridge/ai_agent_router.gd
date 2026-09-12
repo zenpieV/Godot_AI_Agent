@@ -11,6 +11,7 @@ var script_tools: AIAgentScriptTools
 var scene_file_tools: AIAgentSceneFileTools
 var runtime_tools: AIAgentRuntimeTools
 var refactor_tools: RefCounted
+var state_store: RefCounted
 
 
 func _init(
@@ -20,7 +21,8 @@ func _init(
 	p_script_tools: AIAgentScriptTools,
 	p_scene_file_tools: AIAgentSceneFileTools,
 	p_runtime_tools: AIAgentRuntimeTools,
-	p_refactor_tools: RefCounted
+	p_refactor_tools: RefCounted,
+	p_state_store: RefCounted
 ) -> void:
 
 	node_tools = p_node_tools
@@ -36,6 +38,8 @@ func _init(
 	runtime_tools = p_runtime_tools
 
 	refactor_tools = p_refactor_tools
+
+	state_store = p_state_store
 
 
 # ==========================================
@@ -841,6 +845,55 @@ func route_request(
 			refactor_tools,
 			"find_replace_across_files_from_request"
 		)
+
+	# ======================================
+	# Routes: agent UI observability (not
+	# model-facing actions; these serve the
+	# plugin's bottom panel only)
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/agent_event"
+	):
+
+		return _handle_json_route(
+			body_text,
+			state_store,
+			"apply_event_from_request"
+		)
+
+	if (
+		method == "GET"
+		and path == "/agent_state"
+	):
+
+		return state_store.snapshot()
+
+	# ======================================
+	# Routes: agent control channel (the panel's
+	# input box queues requests; the agent in
+	# bridge input mode consumes them; the GET is
+	# also the agent-alive heartbeat)
+	# ======================================
+
+	if (
+		method == "POST"
+		and path == "/agent_input"
+	):
+
+		return _handle_json_route(
+			body_text,
+			state_store,
+			"submit_input_from_request"
+		)
+
+	if (
+		method == "GET"
+		and path == "/agent_input"
+	):
+
+		return state_store.consume_input_snapshot()
 
 	# ======================================
 	# Unknown route
