@@ -1425,3 +1425,353 @@ func find_replace_across_files_from_request(
 		"open_scene_overlap": open_scene_overlap,
 		"undoable": false,
 	}
+
+
+
+# ==========================================
+# checkpoint tools
+# ==========================================
+# File-level safety net: snapshot the project's text
+# files into res://.agent_checkpoints/<id>/ and restore
+# them on demand. Deliberately bounded (walk cap, per-
+# file size cap) and deliberately NOT undoable - a
+# restore is itself a mutation and is verified by
+# read-back. The checkpoint directory is editor-
+# internal (hidden folder, excluded from the other
+# tools' scans).
+
+
+const CHECKPOINT_ROOT := "res://.agent_checkpoints"
+
+const CHECKPOINT_MAX_TOTAL_BYTES := 268435456
+
+
+func _checkpoint_extensions() -> Array:
+
+	return REFERENCE_FILE_EXTENSIONS + [
+		"uid", "json", "md", "txt", "import",
+	]
+
+
+func checkpoint_create_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var label := "checkpoint"
+
+	if data.has("label") and data["label"] != null:
+
+		if typeof(data["label"]) != TYPE_STRING:
+			return {
+				"success": false,
+				"error": (
+					"checkpoint_create label must be a "
+					+ "string."
+				),
+			}
+
+		label = str(data["label"]).strip_edges()
+
+	var stamp := str(
+		Time.get_unix_time_from_system()
+	)
+	stamp = stamp.replace(".", "_")
+
+	var checkpoint_id := label + "-" + stamp
+
+	var target_root := (
+		CHECKPOINT_ROOT + "/" + checkpoint_id
+	)
+
+	var walk_result := _walk_project_files("")
+
+	if not walk_result.get("ok", false):
+		return walk_result
+
+	var copied := 0
+
+	var total_bytes := 0
+
+	var skipped: Array = []
+
+	for file_path in walk_result["paths"]:
+
+		if file_path.begins_with(CHECKPOINT_ROOT):
+			continue
+
+		var file_ext: String = str(
+			file_path.get_extension()
+		)
+
+		var file_name: String = file_path.get_file()
+
+		var is_text: bool = (
+			REFERENCE_FILE_EXTENSIONS.has(file_ext)
+			or file_path == "res://project.godot"
+			or ["uid", "json", "md", "txt", "import"]
+			.has(file_ext)
+		)
+
+		if not is_text:
+			continue
+
+		var read_result := _read_text_file(file_path)
+
+		if not read_result.get("ok", false):
+			skipped.append(file_path)
+			continue
+
+		var content: String = read_result["source"]
+
+		var size: int = content.to_utf8_buffer().size()
+
+		if size > REFACTOR_MAX_FILE_BYTES:
+			skipped.append(file_path)
+			continue
+
+		total_bytes += size
+
+		if total_bytes > CHECKPOINT_MAX_TOTAL_BYTES:
+			return {
+				"success": false,
+				"error": (
+					"checkpoint_create exceeded the total "
+					+ "size budget; nothing was written."
+				),
+			}
+
+		var backup_path: String = (
+			target_root + "/" + file_path.trim_prefix("res://")
+		)
+
+		var dir_result := _ensure_parent_dir(backup_path)
+
+		if not dir_result.get("ok", false):
+			return {
+				"success": false,
+				"error": (
+					"checkpoint_create: "
+					+ dir_result["error"]
+				),
+			}
+
+		var write_result := _write_text_file(
+			backup_path,
+			content
+		)
+
+		if not write_result.get("ok", false):
+			return {
+				"success": false,
+				"error": (
+					"checkpoint_create: "
+					+ write_result["error"]
+				),
+			}
+
+		copied += 1
+
+	return {
+		"success": true,
+		"action": "checkpoint_create",
+		"checkpoint_id": checkpoint_id,
+		"file_count": copied,
+		"total_bytes": total_bytes,
+		"skipped_files": skipped.size(),
+		"undoable": false,
+}
+
+func checkpoint_list_from_request(
+	_data: Dictionary
+) -> Dictionary:
+
+	var root := DirAccess.open(CHECKPOINT_ROOT)
+
+	if root == null:
+
+		return {
+			"success": true,
+			"action": "checkpoint_list",
+			"checkpoints": [],
+		}
+
+	var checkpoints: Array = []
+
+	for checkpoint_id in root.get_directories():
+
+		var dir := DirAccess.open(
+			CHECKPOINT_ROOT + "/" + checkpoint_id
+		)
+
+		var file_count := 0
+
+		if dir != null:
+
+			var stack: Array = [CHECKPOINT_ROOT + "/" + checkpoint_id]
+
+			while not stack.is_empty():
+
+				var current: String = stack.pop_back()
+
+				if not current.ends_with("/"):
+					current = current + "/"
+
+				var access := DirAccess.open(current)
+
+				if access == null:
+					continue
+
+				file_count += access.get_files().size()
+
+				for sub in access.get_directories():
+					stack.append(current + sub + "/")
+
+		checkpoints.append(
+			{
+				"checkpoint_id": checkpoint_id,
+				"file_count": file_count,
+			}
+		)
+
+	checkpoints.sort_custom(
+		func(a, b):
+			return a["checkpoint_id"] < b["checkpoint_id"]
+	)
+
+	return {
+		"success": true,
+		"action": "checkpoint_list",
+		"checkpoints": checkpoints,
+		"count": checkpoints.size(),
+	}
+
+
+func checkpoint_restore_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("checkpoint_id"):
+
+		return {
+			"success": false,
+			"error": (
+				"checkpoint_restore requires "
+				+ "checkpoint_id."
+			)
+		}
+
+	var checkpoint_id: String = str(
+		data["checkpoint_id"]
+	).strip_edges()
+
+	var checkpoint_root := (
+		CHECKPOINT_ROOT + "/" + checkpoint_id
+	)
+
+	if checkpoint_id.is_empty() \
+			or checkpoint_id.contains("..") \
+			or checkpoint_id.contains("/"):
+
+		return {
+			"success": false,
+			"error": (
+				"checkpoint_restore: invalid "
+				+ "checkpoint_id."
+			)
+		}
+
+	if not DirAccess.dir_exists_absolute(checkpoint_root):
+
+		return {
+			"success": false,
+			"error": (
+				"checkpoint_restore: unknown "
+				+ "checkpoint: "
+				+ checkpoint_id
+			)
+		}
+
+	# Walk the checkpoint copy and restore every file to
+	# its project location, verifying each write by
+	# reading it back.
+
+	var restored: Array = []
+
+	var stack: Array = [checkpoint_root]
+
+	var walked := 0
+
+	while not stack.is_empty():
+
+		if walked > REFACTOR_MAX_WALK:
+
+			return {
+				"success": false,
+				"error": (
+					"checkpoint_restore: checkpoint "
+					+ "exceeds the walk cap; restore "
+					+ "aborted."
+				)
+			}
+
+		var current: String = stack.pop_back()
+
+		if not current.ends_with("/"):
+			current = current + "/"
+
+		var access := DirAccess.open(current)
+
+		if access == null:
+			continue
+
+		for file_name in access.get_files():
+
+			var backup_path: String = (
+				current + file_name
+			)
+
+			var project_path: String = (
+				"res://"
+				+ backup_path.trim_prefix(
+					CHECKPOINT_ROOT + "/"
+				).trim_prefix("/")
+			)
+
+			var read_result := _read_text_file(
+				backup_path
+			)
+
+			if not read_result.get("ok", false):
+				continue
+
+			var write_result := _write_text_file(
+				project_path,
+				read_result["source"]
+			)
+
+			if not write_result.get("ok", false):
+
+				return {
+					"success": false,
+					"error": (
+						"checkpoint_restore: "
+						+ write_result["error"]
+					),
+					"restored_files": restored,
+				}
+
+			restored.append(project_path)
+
+			walked += 1
+
+			for sub in access.get_directories():
+				stack.append(current + sub + "/")
+
+	return {
+		"success": true,
+		"action": "checkpoint_restore",
+		"checkpoint_id": checkpoint_id,
+		"restored_count": restored.size(),
+		"restored_files": restored,
+		"undoable": false,
+	}

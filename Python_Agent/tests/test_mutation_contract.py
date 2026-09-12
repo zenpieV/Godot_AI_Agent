@@ -52,6 +52,9 @@ MUTATION_ACTIONS = {
     "run_scene_offline",
     "rename_script",
     "find_replace_across_files",
+    "checkpoint_create",
+    "checkpoint_restore",
+    "run_project_tests",
 }
 
 

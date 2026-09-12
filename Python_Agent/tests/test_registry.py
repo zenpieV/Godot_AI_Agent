@@ -90,6 +90,10 @@ from agent.schemas import (
     ScanProjectIssuesAction,
     RenameScriptAction,
     FindReplaceAcrossFilesAction,
+    CheckpointCreateAction,
+    CheckpointListAction,
+    CheckpointRestoreAction,
+    RunProjectTestsAction,
     ValidateNodeTypeAction,
 )
 from tools import scene_tools
@@ -165,6 +169,10 @@ EXECUTABLE_ACTIONS = {
     "scan_project_issues",
     "rename_script",
     "find_replace_across_files",
+    "checkpoint_create",
+    "checkpoint_list",
+    "checkpoint_restore",
+    "run_project_tests",
 }
 
 MUTATION_ACTIONS = {
@@ -197,6 +205,9 @@ MUTATION_ACTIONS = {
     "run_scene_offline",
     "rename_script",
     "find_replace_across_files",
+    "checkpoint_create",
+    "checkpoint_restore",
+    "run_project_tests",
 }
 
 # The exact required-field mapping previously maintained by hand
@@ -281,6 +292,10 @@ PREVIOUS_ACTION_REQUIREMENTS = {
     "scan_project_issues": (),
     "rename_script": ("script_path", "new_script_path"),
     "find_replace_across_files": ("old_string", "new_string"),
+    "checkpoint_create": (),
+    "checkpoint_list": (),
+    "checkpoint_restore": ("checkpoint_id",),
+    "run_project_tests": (),
     "describe_current_scene": (),
     "batch": ("actions",),
     "final_answer": ("final_answer",),

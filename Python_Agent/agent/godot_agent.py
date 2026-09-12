@@ -3300,6 +3300,46 @@ extensions (default ["gd", "tscn", "tres"])
 prefix (res:// sub-path)
 max_files (1-50, default 20)
 
+68. checkpoint_create
+
+Snapshots the project's text files (scripts, scenes,
+resources, project.godot, .uid sidecars) into an
+internal checkpoint so a later checkpoint_restore can
+roll the project back. Bounded in size; not undoable
+but restorable. Use before large refactors.
+
+Optional parameter:
+
+label (a short name; a timestamp is appended)
+
+69. checkpoint_list
+
+Lists available checkpoints with their ids and file
+counts. Read-only.
+
+Required parameters: none
+
+70. checkpoint_restore
+
+Restores every file of a checkpoint back into the
+project (verified by read-back). Files created after
+the checkpoint are NOT deleted. Not undoable.
+
+Required parameter:
+
+checkpoint_id (from checkpoint_list)
+
+71. run_project_tests
+
+Runs every headless test harness of the plugin via the
+engine binary and reports a structured pass/fail
+summary with per-harness exit codes and durations.
+Use it to verify the plugin's own health on demand.
+
+Optional parameter:
+
+timeout (seconds per harness, 10-600, default 120)
+
 Important rules:
 
 - Each user turn carries a MODE set by the user and

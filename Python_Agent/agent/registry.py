@@ -103,11 +103,16 @@ from agent.schemas import (
     ScanProjectIssuesAction,
     RenameScriptAction,
     FindReplaceAcrossFilesAction,
+    CheckpointCreateAction,
+    CheckpointListAction,
+    CheckpointRestoreAction,
+    RunProjectTestsAction,
     ValidateNodeTypeAction,
 )
 
 from tools import godot_docs
 from tools import offline_runner
+from tools import project_tests
 
 
 @dataclass(frozen=True)
@@ -808,6 +813,34 @@ def _execute_find_replace_across_files(decision):
     )
 
 
+def _execute_checkpoint_create(decision):
+    return scene_tools.checkpoint_create(
+        label=(
+            decision.label
+        ),
+    )
+
+
+def _execute_checkpoint_list(decision):
+    return scene_tools.checkpoint_list()
+
+
+def _execute_checkpoint_restore(decision):
+    return scene_tools.checkpoint_restore(
+        checkpoint_id=(
+            decision.checkpoint_id
+        ),
+    )
+
+
+def _execute_run_project_tests(decision):
+    return project_tests.run_project_tests(
+        timeout=(
+            decision.timeout
+        ),
+    )
+
+
 def _execute_describe_current_scene(decision):
     # Temporary prototype handler: vision is not connected yet,
     # so this returns a fixed placeholder instead of asking Godot.
@@ -1350,6 +1383,34 @@ _ACTION_SPECS = (
         ),
         is_mutation=True,
         handler=_execute_find_replace_across_files,
+    ),
+    ActionSpec(
+        name="checkpoint_create",
+        schema=CheckpointCreateAction,
+        required_fields=(),
+        is_mutation=True,
+        handler=_execute_checkpoint_create,
+    ),
+    ActionSpec(
+        name="checkpoint_list",
+        schema=CheckpointListAction,
+        required_fields=(),
+        is_mutation=False,
+        handler=_execute_checkpoint_list,
+    ),
+    ActionSpec(
+        name="checkpoint_restore",
+        schema=CheckpointRestoreAction,
+        required_fields=("checkpoint_id",),
+        is_mutation=True,
+        handler=_execute_checkpoint_restore,
+    ),
+    ActionSpec(
+        name="run_project_tests",
+        schema=RunProjectTestsAction,
+        required_fields=(),
+        is_mutation=True,
+        handler=_execute_run_project_tests,
     ),
     # --- Control actions (no tool dispatch; intercepted in the
     # main loop / orchestrated by execute_batch_actions) ---

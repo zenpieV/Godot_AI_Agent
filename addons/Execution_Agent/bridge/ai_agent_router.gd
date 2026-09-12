@@ -913,6 +913,39 @@ func route_request(
 
 		return state_store.consume_approval_snapshot()
 
+	if (
+		method == "POST"
+		and path == "/checkpoint_create"
+	):
+
+		return _handle_json_route(
+			body_text,
+			refactor_tools,
+			"checkpoint_create_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/checkpoint_list"
+	):
+
+		return _handle_json_route(
+			body_text,
+			refactor_tools,
+			"checkpoint_list_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/checkpoint_restore"
+	):
+
+		return _handle_json_route(
+			body_text,
+			refactor_tools,
+			"checkpoint_restore_from_request"
+		)
+
 	# ======================================
 	# Unknown route
 	# ======================================

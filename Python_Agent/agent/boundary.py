@@ -90,6 +90,9 @@ _BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
         "prefix",
         "max_files",
     ),
+    "checkpoint_create": ("label",),
+    "checkpoint_restore": ("checkpoint_id",),
+    "run_project_tests": ("timeout",),
 }
 
 # Fields identifying the RESOURCE being mutated (the "target"),
@@ -174,6 +177,9 @@ _MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     # resource; exact fingerprint equivalence only
     # (like set_project_settings).
     "find_replace_across_files": (),
+    "checkpoint_create": ("label",),
+    "checkpoint_restore": ("checkpoint_id",),
+    "run_project_tests": (),
 }
 
 

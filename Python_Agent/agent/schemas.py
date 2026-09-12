@@ -653,6 +653,41 @@ class FindReplaceAcrossFilesAction(BaseAction):
 
 
 # ==========================================
+# Checkpoint and test actions
+# ==========================================
+
+
+class CheckpointCreateAction(BaseAction):
+
+    action: Literal["checkpoint_create"]
+
+    label: Optional[str] = None
+
+
+class CheckpointListAction(BaseAction):
+
+    action: Literal["checkpoint_list"]
+
+
+class CheckpointRestoreAction(BaseAction):
+
+    action: Literal["checkpoint_restore"]
+
+    checkpoint_id: str
+
+
+class RunProjectTestsAction(BaseAction):
+
+    action: Literal["run_project_tests"]
+
+    timeout: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=600,
+    )
+
+
+# ==========================================
 # Temporary prototype actions
 # ==========================================
 
@@ -744,6 +779,10 @@ BatchableAction = Annotated[
         ScanProjectIssuesAction,
         RenameScriptAction,
         FindReplaceAcrossFilesAction,
+        CheckpointCreateAction,
+        CheckpointListAction,
+        CheckpointRestoreAction,
+        RunProjectTestsAction,
         DescribeCurrentSceneAction,
     ],
     Field(
@@ -862,6 +901,10 @@ AgentDecision = Annotated[
         ScanProjectIssuesAction,
         RenameScriptAction,
         FindReplaceAcrossFilesAction,
+        CheckpointCreateAction,
+        CheckpointListAction,
+        CheckpointRestoreAction,
+        RunProjectTestsAction,
         DescribeCurrentSceneAction,
         BatchAction,
         FinalAnswerAction,

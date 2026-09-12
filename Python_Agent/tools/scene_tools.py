@@ -1714,3 +1714,60 @@ def find_replace_across_files(
         method="POST",
         payload=payload
     )
+
+
+def checkpoint_create(
+    label=None
+):
+    """
+    Snapshot the project's text files (scripts, scenes,
+    resources, project.godot, ...) into an internal
+    checkpoint. Use before large refactors so the
+    checkpoint_restore tool can roll the project back.
+    Not undoable itself; bounded in size.
+    """
+
+    payload = {
+        "label": label
+    }
+
+    return _request_json(
+        endpoint="/checkpoint_create",
+        method="POST",
+        payload=payload
+    )
+
+
+def checkpoint_list():
+    """
+    List available checkpoints with their ids and file
+    counts.
+    """
+
+    return _request_json(
+        endpoint="/checkpoint_list",
+        method="POST",
+        payload={}
+    )
+
+
+def checkpoint_restore(
+    checkpoint_id
+):
+    """
+    Restore every file of a checkpoint back into the
+    project. Files created AFTER the checkpoint are not
+    deleted; existing files are overwritten with the
+    checkpointed content (verified by read-back).
+    Not undoable.
+    """
+
+    payload = {
+        "checkpoint_id": checkpoint_id
+    }
+
+    return _request_json(
+        endpoint="/checkpoint_restore",
+        method="POST",
+        payload=payload
+    )

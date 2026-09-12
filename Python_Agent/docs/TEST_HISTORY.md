@@ -2972,3 +2972,82 @@ Confirmed working. Python: 366 passed. The panel is now the
 primary control surface; the CLI remains for stdin workflows.
 Remaining control work: New Session button + context meter
 (quota/context growth), approval gates.
+
+# Architecture Hardening Program: HTTP v2, Verification Contract, Owner Preservation, Runtime Honesty, Control Phase, Checkpoints (2026-09-12)
+
+## Scope
+
+Seven batches implemented from the full-architecture audit
+(two parallel line-by-line reviews of every Godot tool file
+plus the Python layer). Registry: 67 -> 71 actions.
+
+1. **HTTP bridge v2** (ai_agent_http.gd rewritten):
+   Content-Length framing (multi-segment requests no longer
+   truncated), 64 KiB header cap, 10 MiB body cap (413),
+   10 s deadline (408), chunked writes with status checks,
+   real status codes (200/400/404/413/408) with the JSON
+   body shape unchanged, one-frame connection draining.
+   Live-verified: 400 KB create_script body, 404/400/413
+   statuses, Python urllib client compat.
+2. **Verification contract**: delete_node verifies removal
+   (verified_deleted/verified_absent); set_properties
+   verifies EVERY property by read-back (actual_value +
+   verified per property, success = all retained); save_scene
+   trusts the editor Error return (mtime no longer
+   load-bearing); instantiate_scene/open_scene return
+   success=verified; create_resource verifies every property
+   after reload and refuses read-only properties.
+3. **Owner preservation**: delete/reparent no longer
+   re-own to the edited scene root on undo/do - the original
+   owner is captured and restored, so instance-internal
+   nodes are not corrupted into edited-scene nodes.
+4. **Serializer hardening**: null refused for non-NIL
+   expected types; TYPE_OBJECT refused (use
+   assign_resource_to_property); unknown expected types are
+   structured failures instead of raw passthrough; strict
+   float/int component coercion (no more zero-fabrication
+   from "abc"); applied to Vector2/2i/3/3i/Color.
+5. **Runtime honesty**: run_scene/stop_run bounded waits
+   with success=verified (failed launches no longer report
+   success); debugger capture cleared at each run boundary.
+6. **Discoverability**: find_nodes/count_nodes gained
+   include_subclasses (ClassDB.is_parent_class); find_nodes
+   results bounded at 200 with total_matches/truncated;
+   disconnect_signal accepts stale connections (signal or
+   method no longer exists); set_project_settings whitelists
+   known keys; create/rename/duplicate validate names
+   strictly (no null/empty); get_scene_dependencies reports
+   every user of a resource.
+7. **Control + safety**: checkpoint_create/list/restore
+   (project text files into res://.agent_checkpoints/<id>,
+   restore verified by read-back); run_project_tests (runs
+   every headless harness, structured summary); approval
+   gates (AGENT_APPROVAL_MODE=mutations; mutations pause in
+   execute_single_action and poll GET /agent_approval; the
+   panel renders Approve/Deny); New Session button (queues
+   /exit, respawns on session_ended); context meter (prompt
+   tokens vs CONTEXT_LIMIT_TOKENS); FIFO input queue (5);
+   uniform transient provider retry (429/5xx, one retry);
+   configurable bridge timeout; catalog-sync tests (registry
+   actions must appear in the system prompt).
+
+## Tests
+
+Python 377 passed. Harnesses: all green including new
+FIFO/mode cases in the store harness and root-hint cases in
+script_tools_harness. Rule 12 smoke passed for the
+include_subclasses schema change. Live validation on isolated
+instances: checkpoint create/restore (85 files), approval
+flow, context meter.
+
+## Known limitations (honest)
+
+- checkpoint_restore can fail with a Windows sharing
+  violation on files the running editor holds open
+  (observed: godot_bridge.gd); the tool reports the failure
+  and the files restored so far. Full restores are most
+  reliable with the editor closed.
+- Piped-stdin agent runs hit PEP 479 RuntimeError at EOF
+  (test artifact; interactive EOF is correct).
+- get_undo_history_summary_harness.gd never quits headless
+  (pre-existing; skipped in batch runs).
