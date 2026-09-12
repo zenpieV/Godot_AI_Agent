@@ -3305,3 +3305,77 @@ the session, paint its output into the panel, flip the status
 button, or flood the output dock. Note: a legacy agent's own
 console window still shows why IT ended; the active session is
 unaffected.
+
+# Zombie-Survival Run Stops at Step 17 + Panel UX Fixes (2026-09-12, zenpieV report)
+
+## Scope
+
+A long build task ("playable top-down zombie survival scene...")
+stopped at step 17 in two separate runs, both with the last action
+"attach zombie.gd to Zombie". The user also reported: no batch
+actions were used at all (one action per step), chat text appeared
+to cut off around half the panel width, and the run stopped right
+before the sprite/texturing work.
+
+Diagnosis from session telemetry (logs/telemetry):
+
+- BOTH sessions terminated with `termination_reason=
+  model_call_failed`, and the failing call's error is
+  `ClientError: 429 RESOURCE_EXHAUSTED ... exceeded your current
+  quota, check your plan and billing details` (Gemini). The
+  deterministic "step 17" is simply how much quota each run
+  consumes before hitting the wall - the sprite work sits right
+  behind it, which is why it never happened. NOT a plugin bug.
+  Workaround: switch provider/model in the panel selector
+  (now actually effective since the model-passthrough fix), wait
+  for the quota window, or add billing.
+- The output-panel content the user saw was the agent ITSELF
+  playtesting (`run_scene`: game process with the project's
+  godot_bridge.gd autoload on 8080, debugger-capture queries,
+  "--- Debugging process stopped ---") plus the editor replaying
+  the agent's committed undo history after the run
+  ("Scene Redo: AI Agent: ...") - both expected behavior.
+
+Fixes shipped (panel + prompt):
+
+1. Full request in the chat: the agent truncated every turn's
+   request at 120 chars (`request_preview`) and the chat bubble
+   used that preview - long prompts visibly ended mid-line,
+   which reads as a rendering cutoff. The turn_started event now
+   also carries `request_full` (2000-char bound, the FIFO cap);
+   the chat bubble renders it; the 120-char preview stays
+   bounded for the header and activity timeline.
+2. Model-call failures are now VISIBLE in the chat: an "error"
+   event renders a red line inside the in-flight turn (e.g. the
+   429 quota text), so a dead session can no longer read as a
+   silent hang followed by "START SESSION".
+3. Batching guidance in the system prompt: prefer one batch for
+   independent mutations (multiple sibling nodes, multiple
+   attaches, multiple resources); single steps only when the
+   next action depends on the previous result.
+4. Three REAL panel bugs found by a headless layout probe
+   (all pre-existing, every one aborted `_rebuild_activity`):
+   TreeItem assignments of `tooltip_text` (Control property),
+   `collapsible` (removed in Godot 4), and
+   `custom_minimum_size` (Control property). Fixed with
+   per-column `set_tooltip_text(2, ...)`; the two invalid
+   assignments removed. The Activity tab rebuild now runs
+   without script errors and no longer leaves
+   `_turn_items` unrecorded (duplicate turn headers).
+
+The chat layout itself was verified correct headless at 1200px,
+2400px, grow and shrink: bubbles span the full available width
+and re-wrap (autowrap WORD_SMART), so no width bug exists in the
+container chain.
+
+## Tests
+
+Python 389 passed (no schema changes; prompt addition only).
+Harnesses 22/22 green including the store harness with the new
+request_full fallback behavior.
+
+## Status
+
+Step-17 stop closed as provider quota exhaustion (visible in the
+panel now); batch preference, full-request chat rendering, error
+visibility, and three Activity-tab script errors shipped.

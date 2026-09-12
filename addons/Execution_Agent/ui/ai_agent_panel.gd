@@ -1058,11 +1058,18 @@ func _rebuild_activity() -> void:
 			_row_summary(event)
 		)
 
-		row.tooltip_text = str(
-			event.get("detail", "")
-		)
+		# TreeItem has no tooltip_text property (that is a
+		# Control property); the tooltip is per-column -
+		# assign it to the summary column. Assigning the
+		# Control property throws a script error that
+		# aborts the whole rebuild. (Same class of bug as
+		# the removed `collapsible` assignment - Godot 4
+		# TreeItem has neither property.)
 
-		row.collapsible = false
+		row.set_tooltip_text(
+			2,
+			str(event.get("detail", ""))
+		)
 
 		_apply_kind_color(row, str(event.get("kind", "")))
 
@@ -1114,7 +1121,11 @@ func _get_turn_item(
 
 		item.set_text(0, "Session")
 
-	item.custom_minimum_size = Vector2(0, 22)
+	# TreeItem is not a Control: it has no
+	# custom_minimum_size. Row height comes from the Tree's
+	# theme. Assigning it throws a script error that
+	# aborts the rebuild and leaves _turn_items unrecorded
+	# (duplicate turn headers on every event).
 
 	_turn_items[turn] = item
 
@@ -1569,6 +1580,21 @@ func _rebuild_chat() -> void:
 					_make_thinking_line("...")
 				)
 
+			# A failed model call (quota exhausted,
+			# provider outage) must be visible exactly
+			# where the user is waiting - otherwise a
+			# dead session reads as a hang.
+
+			var turn_error := str(
+				turn_entry.get("error", "")
+			)
+
+			if not turn_error.is_empty():
+
+				_chat_box.add_child(
+					_make_error_line(turn_error)
+				)
+
 		if completed:
 
 			_chat_box.add_child(
@@ -1695,6 +1721,37 @@ func _make_thinking_line(
 			"font_disabled_color",
 			Color(0.6, 0.6, 0.6)
 		)
+	)
+
+	label.add_theme_font_size_override(
+		"font_size",
+		12
+	)
+
+	return label
+
+
+func _make_error_line(
+	error_text: String
+) -> Control:
+
+	var label := Label.new()
+
+	label.text = "⚠ %s" % error_text
+
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+	label.size_flags_horizontal = (
+		Control.SIZE_EXPAND_FILL
+	)
+
+	# Red is reserved for errors - this is one. Fixed
+	# color, not the theme accent (which renders red in
+	# some themes and is reserved for other states).
+
+	label.add_theme_color_override(
+		"font_color",
+		Color(0.85, 0.35, 0.35)
 	)
 
 	label.add_theme_font_size_override(

@@ -2133,6 +2133,10 @@ class AgentSession:
             "turn_started",
             turn=self.turn_number,
             request_preview=str(next_request)[:120],
+            # The chat bubble shows the user's full
+            # request; the 120-char preview stays for
+            # the header and the activity timeline.
+            request_full=str(next_request)[:2000],
             mode=next_mode,
         )
 
@@ -2317,6 +2321,7 @@ UI_REPORTER.report(
     "turn_started",
     turn=1,
     request_preview=str(user_request)[:120],
+    request_full=str(user_request)[:2000],
     mode=first_turn_mode,
 )
 
@@ -3501,6 +3506,18 @@ Important rules:
 
 - Choose exactly one step per response: either one
   action, or one batch.
+
+- PREFER A BATCH for independent work: when several
+  mutations have no dependency on each other (creating
+  multiple sibling nodes, attaching multiple already-
+  existing scripts, creating several resources), put
+  them in ONE batch instead of spending one step per
+  action. Use a single step when the next action
+  depends on the previous result (a node must exist
+  before you can attach to it; a script must exist
+  before attaching). Batches finish the same work in a
+  fraction of the steps and tokens, which also
+  conserves your context budget.
 
 - Never select an action until every required
   field for that action has been populated.

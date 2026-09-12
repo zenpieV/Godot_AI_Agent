@@ -329,9 +329,15 @@ func apply_event(
 				STATUS_READY,
 				""
 			)
+			# The CHAT shows the user's full request;
+			# the 120-char request_preview stays
+			# bounded for the header and timeline.
 			_append_chat_turn(
 				turn_number,
-				request_preview,
+				str(event.get(
+					"request_full",
+					request_preview
+				)),
 				str(event.get("mode", "act"))
 			)
 			_add_event(
@@ -519,6 +525,14 @@ func apply_event(
 				),
 				str(event.get("error", "")),
 				turn_number
+			)
+			# The error must be visible where the user
+			# is looking: the chat. A model-call failure
+			# (quota exhausted, provider down) otherwise
+			# reads as "THINKING -> START SESSION" with
+			# no explanation at all.
+			_append_chat_error(
+				str(event.get("error", ""))
 			)
 
 		"max_steps_reached":
@@ -1149,6 +1163,26 @@ func _append_chat_thinking(
 	# entirely when the final answer arrives.
 
 	entry["thinking"] = reason.substr(
+		0, MAX_THINKING_CHARS
+	)
+
+	chat_updated.emit()
+
+
+func _append_chat_error(
+	error_text: String
+) -> void:
+
+	# Rendered as a red line inside the in-flight turn so
+	# a failed model call (quota, provider outage) is
+	# self-explanatory instead of looking like a hang.
+
+	if chat_turns.is_empty():
+		return
+
+	var entry: Dictionary = chat_turns.back()
+
+	entry["error"] = error_text.substr(
 		0, MAX_THINKING_CHARS
 	)
 
