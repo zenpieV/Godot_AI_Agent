@@ -49,6 +49,14 @@ CONTEXT_LIMIT_TOKENS = int(
 # are fast, but heavy operations (project scans, refactors
 # over large projects) legitimately take seconds.
 
+# Mutation approval gates: when set to "mutations", every
+# mutation action pauses before execution and waits for
+# the user's Approve/Deny in the Godot panel. "off" runs
+# verified tools autonomously.
+APPROVAL_MODE = _os_ctx.getenv(
+    "AGENT_APPROVAL_MODE", "off"
+).strip().lower()
+
 BRIDGE_TIMEOUT_SECONDS = float(
     _os_ctx.getenv("GODOT_BRIDGE_TIMEOUT", "15")
 )

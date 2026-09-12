@@ -81,6 +81,8 @@ var _tokens_label: Label
 var _approval_label: Label
 var _new_session_button: Button
 var _context_label: Label
+var _approve_button: Button
+var _deny_button: Button
 
 var _tabs: TabContainer
 
@@ -177,6 +179,14 @@ func _process(_delta: float) -> void:
 
 	_update_connection_dot()
 
+	var waiting := (
+		store != null
+		and store.status == "waiting_approval"
+		and store.approval_id != ""
+	)
+	_approve_button.visible = waiting
+	_deny_button.visible = waiting
+	_approval_label.visible = not waiting
 	_update_context_label()
 
 	# STARTING... must not wedge: if the agent process
@@ -488,6 +498,23 @@ func _build_header(
 
 	header.add_child(_approval_label)
 
+	# Approval gate controls: visible only while a
+	# mutation waits for the user's decision.
+	_approve_button = Button.new()
+	_approve_button.text = "Approve"
+	_approve_button.visible = false
+	_approve_button.pressed.connect(
+		_on_approval_pressed.bind(true)
+	)
+	header.add_child(_approve_button)
+
+	_deny_button = Button.new()
+	_deny_button.text = "Deny"
+	_deny_button.visible = false
+	_deny_button.pressed.connect(
+		_on_approval_pressed.bind(false)
+	)
+	header.add_child(_deny_button)
 	# New Session: ends the running agent process via
 	# /exit (queued like any request) and spawns a fresh
 	# one as soon as the session_ended event lands. The
@@ -855,6 +882,16 @@ func _refresh_header() -> void:
 
 	_update_elapsed()
 
+
+func _on_approval_pressed(approved: bool) -> void:
+	if store == null or store.approval_id == "":
+		return
+
+	_post_bridge_json(
+		"/agent_approval",
+		{"id": store.approval_id, "approved": approved},
+		Callable()
+	)
 
 func _update_context_label() -> void:
 

@@ -151,6 +151,11 @@ var context_used_tokens: int = 0
 
 # New Session respawn flow (see the panel).
 var respawn_pending: bool = false
+	# Approval gate: one pending request and its decision
+	# (-1 none, 0 denied, 1 approved).
+var approval_id: String = ""
+var approval_action: String = ""
+var approval_decision: int = -1
 
 # Start Session flow: the panel's status button spawns the
 # agent process; between the click and the agent's
@@ -503,6 +508,39 @@ func apply_event(
 				turn_number
 			)
 
+		"approval_requested":
+			approval_id = str(event.get("approval_id", ""))
+			approval_action = str(event.get("action", ""))
+			approval_decision = -1
+			_set_status(STATUS_WAITING_APPROVAL, approval_action)
+			_add_event(
+				"attention",
+				"Approval requested: %s" % approval_action,
+				approval_action,
+				turn_number
+			)
+
+		"approval_decision":
+			approval_id = str(event.get("approval_decision_id", approval_id))
+			approval_decision = (
+				1 if bool(event.get("approved", false))
+				else 0
+			)
+			_set_status(
+				STATUS_EXECUTING_TOOL if approval_decision == 1
+				else STATUS_NEEDS_ATTENTION,
+				approval_action
+			)
+			_add_event(
+				"event",
+				"Approval %s for %s" % [
+					"granted" if approval_decision == 1 else "denied",
+					approval_action,
+				],
+				"",
+				turn_number
+			)
+
 		"turn_completed":
 			_complete_chat_turn(
 				str(event.get("final_answer", ""))
@@ -702,6 +740,51 @@ func consume_input_snapshot() -> Dictionary:
 
 	return snapshot
 
+
+func submit_approval_from_request(data: Dictionary) -> Dictionary:
+
+	if not data.has("approved"):
+		return {
+			"success": false,
+			"error": "agent_approval requires approved.",
+	}
+
+	if approval_id.is_empty():
+		return {
+			"success": false,
+			"error": "no approval is currently pending.",
+	}
+
+	approval_decision = 1 if bool(data["approved"]) else 0
+
+	return {
+		"success": true,
+		"action": "agent_approval",
+		"recorded": true,
+}
+
+
+func consume_approval_snapshot() -> Dictionary:
+
+	last_input_poll_ms = Time.get_ticks_msec()
+
+	if approval_decision == -1:
+		return {
+			"success": true,
+			"pending": false,
+			"approved": false,
+	}
+
+	var snapshot := {
+		"success": true,
+		"pending": true,
+		"approved": approval_decision == 1,
+	}
+
+	# Decision consumed; the agent proceeds (approved) or
+	# reports the denial (denied).
+	approval_decision = -1
+	return snapshot
 
 func is_agent_connected() -> bool:
 

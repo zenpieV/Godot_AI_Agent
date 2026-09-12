@@ -895,6 +895,24 @@ func route_request(
 
 		return state_store.consume_input_snapshot()
 
+	if (
+		method == "POST"
+		and path == "/agent_approval"
+	):
+
+		return _handle_json_route(
+			body_text,
+			state_store,
+			"submit_approval_from_request"
+		)
+
+	if (
+		method == "GET"
+		and path == "/agent_approval"
+	):
+
+		return state_store.consume_approval_snapshot()
+
 	# ======================================
 	# Unknown route
 	# ======================================

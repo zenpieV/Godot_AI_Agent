@@ -1211,6 +1211,75 @@ def execute_single_action(
         **tool_started_fields,
     )
 
+    # Approval gate: when enabled, every mutation pauses
+    # here and waits (bounded) for the user's decision in
+    # the panel. The mutation executes only on approval;
+    # a denial becomes a structured failure the model can
+    # observe and react to.
+
+    if (
+        _ui_settings.APPROVAL_MODE == "mutations"
+        and is_mutation_action(decision.action)
+    ):
+
+        from agent import bridge_input as _bridge_input
+
+        approval_id = str(uuid.uuid4())[:8]
+
+        UI_REPORTER.report(
+            "approval_requested",
+            turn=turn_number,
+            step=step_number,
+            approval_id=approval_id,
+            action=str(decision.action),
+        )
+
+        approved = False
+        decision_received = False
+        waited_s = 0.0
+
+        while waited_s < 600.0:
+
+            poll = _bridge_input.fetch_approval()
+
+            if poll["reachable"] and poll["pending"]:
+                approved = poll["approved"]
+                decision_received = True
+                break
+
+            time.sleep(0.5)
+            waited_s += 0.5
+
+        UI_REPORTER.report(
+            "approval_decision",
+            turn=turn_number,
+            step=step_number,
+            action=str(decision.action),
+            approved=approved,
+            timed_out=not decision_received,
+        )
+
+        if not (decision_received and approved):
+
+            denial = (
+                "Denied by the user in the panel."
+                if decision_received
+                else "Approval wait timed out after "
+                + "600 s; treated as denial."
+            )
+
+            return {
+                "success": False,
+                "action": str(decision.action),
+                "error": denial,
+                "approval_denied": True,
+                "message": (
+                    "The mutation was not executed. Ask "
+                    + "the user how to proceed or choose "
+                    + "a different approach."
+                ),
+            }
+
     try:
         result = _execute_single_action(decision)
     except Exception as error:

@@ -137,3 +137,51 @@ def read_request(
             return result
 
         sleep(interval)
+
+
+def fetch_approval(bridge_url=None, timeout_seconds=None):
+    """
+    One consume-on-read GET /agent_approval. Returns
+    {"reachable", "pending", "approved"}. Never raises.
+    """
+
+    url = (bridge_url or GODOT_BRIDGE_URL) + "/agent_approval"
+
+    effective_timeout = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else POLL_TIMEOUT_SECONDS
+    )
+
+    try:
+
+        request = urllib.request.Request(
+            url,
+            method="GET",
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=effective_timeout,
+        ) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+    except Exception:
+        return {
+            "reachable": False,
+            "pending": False,
+            "approved": False,
+        }
+
+    if not isinstance(data, dict):
+        return {
+            "reachable": False,
+            "pending": False,
+            "approved": False,
+        }
+
+    return {
+        "reachable": True,
+        "pending": bool(data.get("pending", False)),
+        "approved": bool(data.get("approved", False)),
+    }
