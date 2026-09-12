@@ -70,6 +70,15 @@ _BATCH_ACTION_EQUIVALENCE_KEYS: dict[str, tuple[str, ...]] = {
         "resource_type",
         "properties_json",
     ),
+    # Resource file operations: a skipped delete blocks
+    # any re-proposal against the same path; a skipped
+    # rename blocks the same source->destination pair.
+    "delete_resource": ("resource_path",),
+    "rename_resource": (
+        "resource_path",
+        "new_resource_path",
+    ),
+    "create_directory": ("directory_path",),
     "run_scene_offline": ("scene_path", "timeout", "max_output_chars"),
     # Script refactoring: the mutated resource is the script
     # file itself; a skipped rename of a script blocks any
@@ -165,6 +174,13 @@ _MUTATION_TARGET_KEYS: dict[str, tuple[str, ...]] = {
     # File-backed resource creation: the mutated resource
     # is the file.
     "create_resource": ("resource_path",),
+    # Resource file operations mutate the file at the
+    # given path (the source file, for renames - same
+    # conservatism as rename_script: a skipped rename
+    # blocks any further rename of the same source).
+    "delete_resource": ("resource_path",),
+    "rename_resource": ("resource_path",),
+    "create_directory": ("directory_path",),
     # Offline execution spawns a process; fingerprint
     # equivalence only.
     "run_scene_offline": (),

@@ -86,6 +86,9 @@ from agent.schemas import (
     SaveSceneAsAction,
     SetProjectSettingsAction,
     CreateResourceAction,
+    DeleteResourceAction,
+    RenameResourceAction,
+    CreateDirectoryAction,
     RunSceneOfflineAction,
     ScanProjectIssuesAction,
     RenameScriptAction,
@@ -165,6 +168,9 @@ EXECUTABLE_ACTIONS = {
     "save_scene_as",
     "set_project_settings",
     "create_resource",
+    "delete_resource",
+    "rename_resource",
+    "create_directory",
     "run_scene_offline",
     "scan_project_issues",
     "rename_script",
@@ -202,6 +208,9 @@ MUTATION_ACTIONS = {
     "save_scene_as",
     "set_project_settings",
     "create_resource",
+    "delete_resource",
+    "rename_resource",
+    "create_directory",
     "run_scene_offline",
     "rename_script",
     "find_replace_across_files",
@@ -288,6 +297,9 @@ PREVIOUS_ACTION_REQUIREMENTS = {
         "resource_type",
         "properties_json",
     ),
+    "delete_resource": ("resource_path",),
+    "rename_resource": ("resource_path", "new_resource_path"),
+    "create_directory": ("directory_path",),
     "run_scene_offline": ("scene_path",),
     "scan_project_issues": (),
     "rename_script": ("script_path", "new_script_path"),
@@ -1973,3 +1985,122 @@ def test_script_batch_uses_same_execution_and_mutation_telemetry(
     assert telemetry.mutations[2].verification == "verified"
     assert telemetry.mutations[2].undoable is True
 
+
+
+def test_file_operations_registered_as_mutations():
+    """The resource file operations are executable mutations."""
+    for name in (
+        "delete_resource",
+        "rename_resource",
+        "create_directory",
+    ):
+        spec = ACTION_REGISTRY[name]
+        assert spec.is_mutation is True
+        assert callable(spec.handler)
+        assert name in boundary._MUTATION_TARGET_KEYS
+        assert name in boundary._BATCH_ACTION_EQUIVALENCE_KEYS
+
+
+def test_file_operations_required_fields():
+    assert (
+        ACTION_REGISTRY["delete_resource"].required_fields
+        == ("resource_path",)
+    )
+    assert (
+        ACTION_REGISTRY["rename_resource"].required_fields
+        == ("resource_path", "new_resource_path")
+    )
+    assert (
+        ACTION_REGISTRY["create_directory"].required_fields
+        == ("directory_path",)
+    )
+
+
+def test_file_operation_decisions_validate_and_dispatch(
+    agent_module, monkeypatch
+):
+    """Each file operation validates through the real AgentDecision
+    schema and dispatches to its scene_tools wrapper with the right
+    arguments."""
+
+    calls = []
+
+    monkeypatch.setattr(
+        scene_tools,
+        "delete_resource",
+        lambda resource_path: calls.append(
+            ("delete_resource", resource_path)
+        )
+        or {"success": True, "verified_deleted": True},
+    )
+    monkeypatch.setattr(
+        scene_tools,
+        "rename_resource",
+        lambda resource_path, new_resource_path: calls.append(
+            ("rename_resource", resource_path, new_resource_path)
+        )
+        or {"success": True, "verified_moved": True},
+    )
+    monkeypatch.setattr(
+        scene_tools,
+        "create_directory",
+        lambda directory_path: calls.append(
+            ("create_directory", directory_path)
+        )
+        or {"success": True, "verified_created": True},
+    )
+
+    agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "delete_resource",
+                "reason": "Remove the stray resource.",
+                "resource_path": "res://stray.tres",
+            }
+        )
+    )
+    decision = agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "rename_resource",
+                "reason": "Move into the resources folder.",
+                "resource_path": "res://capsule_shape.tres",
+                "new_resource_path": "res://resources/capsule_shape.tres",
+            }
+        )
+    )
+    agent_module.AGENT_DECISION_ADAPTER.validate_json(
+        json.dumps(
+            {
+                "action": "create_directory",
+                "reason": "Create the resources folder.",
+                "directory_path": "res://resources",
+            }
+        )
+    )
+
+    spec = ACTION_REGISTRY["rename_resource"]
+    spec.handler(decision)
+
+    assert calls == [
+        (
+            "rename_resource",
+            "res://capsule_shape.tres",
+            "res://resources/capsule_shape.tres",
+        )
+    ]
+
+
+def test_file_operations_are_batchable():
+    """All three file operations appear in the BatchableAction union."""
+    from agent.schemas import BatchableAction
+
+    batchable_names = {
+        cls.__name__ for cls in _union_members(BatchableAction)
+    }
+    for schema_name in (
+        "DeleteResourceAction",
+        "RenameResourceAction",
+        "CreateDirectoryAction",
+    ):
+        assert schema_name in batchable_names

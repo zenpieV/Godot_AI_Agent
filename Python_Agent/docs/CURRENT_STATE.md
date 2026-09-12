@@ -2020,3 +2020,35 @@ from other union branches for Gemini.
   providers were changed.
 - All 8 provider adapter tests pass; full suite 236 passed.
 
+
+# Resource file management + model selection passthrough (2026-09-12)
+
+Registry grows to **74 actions** (71 -> 74). New file operations,
+all batchable mutations with boundary fingerprints, verified by
+read-back, `undoable: false`, and restricted so they can never touch
+scenes, scripts, project.godot, or anything outside res://:
+
+- `delete_resource` - removes a .tres/.res file; refuses directories
+  and repeats ("resource not found"), so deletion is never guessed.
+- `rename_resource` - renames/moves a .tres/.res file; creates missing
+  destination folders; never overwrites; does NOT rewrite references
+  (the result message says so explicitly).
+- `create_directory` - explicit folder creation; fails if the path
+  already exists as folder or file.
+
+Prompt-side guard rails: the system prompt gained a "File mutation
+limits" section (exhaustive list of existing file operations + the
+never-delete/never-overwrite rule), and both the system prompt and the
+validation-reject result message instruct the model to return
+final_answer stating a limitation instead of inventing parameters when
+no action fits.
+
+Model selection fix: `ask_model()` now passes the panel-selected model
+into every provider adapter (`model=None` falls back to the settings
+default). Previously the dropdown changed only the telemetry label
+while the adapter always called the settings default.
+
+Verified: 385 Python tests, 22/22 harnesses, 8/8 curl route cases on
+an isolated editor instance, Rule 12 live Gemini smoke, and a full
+3-turn bridge-mode agent run (create -> move into folder -> delete)
+with a 4/4 verified mutation ledger.

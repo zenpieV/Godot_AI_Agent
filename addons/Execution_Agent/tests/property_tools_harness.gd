@@ -191,6 +191,184 @@ func _run_shared_cases() -> void:
 	assert(not JSON.stringify(info).is_empty())
 
 
+func _run_file_op_cases() -> void:
+
+	# 8. create_directory: success with read-back
+	# verification, then refuse to re-create it.
+	var made_dir = (
+		property_tools.create_directory_from_request(
+			{"directory_path": "res://.agent_file_op_test"}
+		)
+	)
+	assert(made_dir["success"])
+	assert(made_dir["action"] == "create_directory")
+	assert(made_dir["verified_created"] == true)
+	assert(made_dir["changed"] == true)
+	assert(made_dir["undoable"] == false)
+	assert(
+		DirAccess.dir_exists_absolute(
+			"res://.agent_file_op_test"
+		)
+	)
+
+	var made_dir_again = (
+		property_tools.create_directory_from_request(
+			{"directory_path": "res://.agent_file_op_test"}
+		)
+	)
+	assert(not made_dir_again["success"])
+	assert(made_dir_again["error"].contains("already exists"))
+
+	var dir_traversal = (
+		property_tools.create_directory_from_request(
+			{"directory_path": "res://../evil"}
+		)
+	)
+	assert(not dir_traversal["success"])
+	assert(dir_traversal["error"].contains("traversal"))
+
+	# 9. create_resource: needed as the fixture file for
+	# rename/delete below.
+	var made_resource = (
+		property_tools.create_resource_from_request(
+			{
+				"resource_path":
+					"res://.agent_file_op_test/probe.tres",
+				"resource_type": "Resource",
+				"properties": {}
+			}
+		)
+	)
+	assert(made_resource["success"])
+	assert(made_resource["verified_write"] == true)
+
+	# 10. rename_resource: move into a nested folder that
+	# does not exist yet; destination folder is created,
+	# source is verified gone.
+	var moved = (
+		property_tools.rename_resource_from_request(
+			{
+				"resource_path":
+					"res://.agent_file_op_test/probe.tres",
+				"new_resource_path":
+					"res://.agent_file_op_test/moved/probe.tres"
+			}
+		)
+	)
+	assert(moved["success"])
+	assert(moved["action"] == "rename_resource")
+	assert(moved["verified_moved"] == true)
+	assert(moved["verified_destination_exists"] == true)
+	assert(moved["verified_source_absent"] == true)
+	assert(
+		not FileAccess.file_exists(
+			"res://.agent_file_op_test/probe.tres"
+		)
+	)
+	assert(
+		FileAccess.file_exists(
+			"res://.agent_file_op_test/moved/probe.tres"
+		)
+	)
+
+	var rename_missing = (
+		property_tools.rename_resource_from_request(
+			{
+				"resource_path":
+					"res://.agent_file_op_test/ghost.tres",
+				"new_resource_path":
+					"res://.agent_file_op_test/other.tres"
+			}
+		)
+	)
+	assert(not rename_missing["success"])
+	assert(rename_missing["error"].contains("resource not found"))
+
+	var rename_onto_existing = (
+		property_tools.rename_resource_from_request(
+			{
+				"resource_path":
+					"res://.agent_file_op_test/moved/probe.tres",
+				"new_resource_path":
+					"res://.agent_file_op_test/moved/probe.tres"
+			}
+		)
+	)
+	assert(not rename_onto_existing["success"])
+	assert(
+		rename_onto_existing["error"].contains("identical")
+	)
+
+	# 11. delete_resource: verified absence, then a clean
+	# structured failure for the already-deleted path.
+	var deleted = (
+		property_tools.delete_resource_from_request(
+			{
+				"resource_path":
+					"res://.agent_file_op_test/moved/probe.tres"
+			}
+		)
+	)
+	assert(deleted["success"])
+	assert(deleted["action"] == "delete_resource")
+	assert(deleted["verified_deleted"] == true)
+	assert(deleted["verified_absent"] == true)
+	assert(
+		not FileAccess.file_exists(
+			"res://.agent_file_op_test/moved/probe.tres"
+		)
+	)
+
+	var delete_missing = (
+		property_tools.delete_resource_from_request(
+			{
+				"resource_path":
+					"res://.agent_file_op_test/moved/probe.tres"
+			}
+		)
+	)
+	assert(not delete_missing["success"])
+	assert(delete_missing["error"].contains("resource not found"))
+
+	var delete_wrong_type = (
+		property_tools.delete_resource_from_request(
+			{"resource_path": "res://project.godot"}
+		)
+	)
+	assert(not delete_wrong_type["success"])
+	assert(
+		delete_wrong_type["error"].contains(
+			".tres or .res"
+		)
+	)
+
+	var delete_traversal = (
+		property_tools.delete_resource_from_request(
+			{"resource_path": "res://../evil.tres"}
+		)
+	)
+	assert(not delete_traversal["success"])
+	assert(delete_traversal["error"].contains("traversal"))
+
+	# 12. JSON-serializable results.
+	assert(not JSON.stringify(made_dir).is_empty())
+	assert(not JSON.stringify(moved).is_empty())
+	assert(not JSON.stringify(deleted).is_empty())
+
+
+func _cleanup_file_op_cases() -> void:
+
+	DirAccess.remove_absolute(
+		"res://.agent_file_op_test/moved/probe.tres"
+	)
+	DirAccess.remove_absolute(
+		"res://.agent_file_op_test/moved"
+	)
+	DirAccess.remove_absolute(
+		"res://.agent_file_op_test"
+	)
+
+
 func _run_undo_capable_cases(undo_manager) -> void:
 	# 8. assign_resource_to_property: full path with verification.
 	var assign_result = (
@@ -265,6 +443,16 @@ func _init() -> void:
 	)
 
 	_run_shared_cases()
+	_run_file_op_cases()
+	_cleanup_file_op_cases()
+
+	assert(
+		not DirAccess.dir_exists_absolute(
+			"res://.agent_file_op_test"
+		)
+	)
+
+	print("property tools file op cases passed")
 
 	if ClassDB.can_instantiate("EditorUndoRedoManager"):
 		var undo_manager = ClassDB.instantiate(

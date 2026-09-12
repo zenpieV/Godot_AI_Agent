@@ -2162,6 +2162,102 @@ by loading the file back. Works headless. Not undoable.
 ---
 
 
+# Tool: delete_resource
+
+## Purpose
+
+Deletes an existing `.tres` or `.res` resource file and
+verifies absence by read-back. Restricted to resource
+files only: directories, scenes (.tscn), scripts (.gd),
+project.godot, and imported assets are refused
+structurally, so the model can never delete them through
+this action. File deletion is not undoable; scenes or
+resources referencing the path will report a missing
+dependency. Works headless.
+
+## Request
+
+```json
+{"action": "delete_resource",
+ "reason": "The root copy is the stale one.",
+ "resource_path": "res://capsule_shape.tres"}
+```
+
+## Success response
+
+`success`, `resource_path`, `message`,
+`verified_deleted: true`, `verified_absent: true`,
+`changed: true`, `undoable: false`.
+
+A second delete of the same path fails with
+`resource not found` (honest failure, not idempotent
+success).
+
+---
+
+
+# Tool: rename_resource
+
+## Purpose
+
+Renames or moves an existing `.tres`/`.res` file to a new
+res:// path in one deterministic operation. Missing
+destination folders are created; an existing destination
+file or folder is never overwritten (structured failure
+instead). Verified by read-back: destination exists AND
+source is absent. References to the old path are NOT
+rewritten (unlike `rename_script`) - the result message
+says so, and `scan_project_issues` will report the
+missing dependencies until the model updates the
+referencing files. Not undoable. Works headless.
+
+## Request
+
+```json
+{"action": "rename_resource",
+ "reason": "The resource belongs under resources/.",
+ "resource_path": "res://capsule_shape.tres",
+ "new_resource_path": "res://resources/capsule_shape.tres"}
+```
+
+## Success response
+
+`success`, `resource_path` (old), `new_resource_path`,
+`verified_moved: true`, `verified_destination_exists: true`,
+`verified_source_absent: true`, `changed: true`,
+`undoable: false`.
+
+---
+
+
+# Tool: create_directory
+
+## Purpose
+
+Creates a folder inside the project, nested parents
+included. Fails when the path already exists as a folder
+or as a file, so an existing folder is never mistaken for
+a created one (the agent previously had no way to create
+a folder explicitly; `create_resource` creates parents
+implicitly). Verified by read-back. Not undoable. Works
+headless.
+
+## Request
+
+```json
+{"action": "create_directory",
+ "reason": "The project needs a resources folder.",
+ "directory_path": "res://resources"}
+```
+
+## Success response
+
+`success`, `directory_path`, `verified_created: true`,
+`changed: true`, `undoable: false`.
+
+---
+
+
 # Tool: run_scene_offline
 
 ## Purpose

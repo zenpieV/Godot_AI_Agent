@@ -809,6 +809,39 @@ func route_request(
 			"create_resource_from_request"
 		)
 
+	if (
+		method == "POST"
+		and path == "/delete_resource"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"delete_resource_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/rename_resource"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"rename_resource_from_request"
+		)
+
+	if (
+		method == "POST"
+		and path == "/create_directory"
+	):
+
+		return _handle_json_route(
+			body_text,
+			property_tools,
+			"create_directory_from_request"
+		)
+
 	# ======================================
 	# Routes: project linting and refactoring
 	# ======================================

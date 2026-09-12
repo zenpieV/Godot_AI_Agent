@@ -2084,6 +2084,44 @@ def test_zai_provider_selected_through_ask_model(agent_module, monkeypatch):
     assert captured["conversation"] == []
 
 
+def test_selected_model_reaches_provider_call(agent_module, monkeypatch):
+    """Regression: the panel's model selection used to change only
+    the telemetry label while the adapter still called the settings
+    default model."""
+    captured = {}
+
+    def fake_ask_gemini(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return ProviderResult(text='{"action":"final_answer"}')
+
+    monkeypatch.setattr(agent_module, "MODEL_PROVIDER", "gemini")
+    monkeypatch.setattr(agent_module, "ACTIVE_PROVIDER", None)
+    monkeypatch.setattr(agent_module, "ACTIVE_MODEL", "gemini-9.9-panel-pick")
+    monkeypatch.setattr(agent_module, "ask_gemini", fake_ask_gemini)
+
+    agent_module.ask_model([])
+
+    assert captured["model"] == "gemini-9.9-panel-pick"
+
+
+def test_unset_model_selection_falls_back_to_settings_default(
+    agent_module, monkeypatch
+):
+    captured = {}
+
+    def fake_ask_gemini(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return ProviderResult(text='{"action":"final_answer"}')
+
+    monkeypatch.setattr(agent_module, "MODEL_PROVIDER", "gemini")
+    monkeypatch.setattr(agent_module, "ACTIVE_MODEL", None)
+    monkeypatch.setattr(agent_module, "ask_gemini", fake_ask_gemini)
+
+    agent_module.ask_model([])
+
+    assert captured["model"] == agent_module.GEMINI_MODEL
+
+
 def test_agent_session_keeps_state_across_user_turns(agent_module, monkeypatch):
     conversation = [
         {"role": "system", "content": "system"},

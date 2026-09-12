@@ -251,7 +251,17 @@ def _maybe_wait_for_headroom():
 def ask_groq(
     conversation,
     schema,
+    model=None,
 ):
+    """
+    Send the full conversation to Groq and request a
+    JSON-object completion.
+
+    `model` overrides the settings default so the
+    panel's per-turn model selection reaches the API
+    call; None falls back to GROQ_MODEL.
+    """
+
     api_key = os.getenv(
         "GROQ_API_KEY"
     )
@@ -283,7 +293,7 @@ def ask_groq(
         # not an SDK internal.
         raw_response = (
             client.chat.completions.with_raw_response.create(
-                model=GROQ_MODEL,
+                model=model or GROQ_MODEL,
                 messages=groq_messages,
                 reasoning_effort="medium",
                 response_format={
@@ -312,7 +322,7 @@ def ask_groq(
         )
 
         response = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model or GROQ_MODEL,
             messages=groq_messages,
             reasoning_effort="medium",
             response_format={

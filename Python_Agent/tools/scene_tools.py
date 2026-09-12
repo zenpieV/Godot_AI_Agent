@@ -1606,6 +1606,76 @@ def create_resource(
     )
 
 
+def delete_resource(resource_path):
+    """
+    Delete an existing resource file (.tres or .res)
+    from the project.
+
+    The bridge refuses directories and anything that is
+    not a .tres/.res file (scenes, scripts, and
+    project.godot can never be deleted through this
+    action), removes the file, and verifies absence by
+    read-back. File deletion is not undoable.
+    """
+
+    payload = {
+        "resource_path": resource_path
+    }
+
+    return _request_json(
+        endpoint="/delete_resource",
+        method="POST",
+        payload=payload
+    )
+
+
+def rename_resource(resource_path, new_resource_path):
+    """
+    Rename or move an existing resource file (.tres or
+    .res) to a new res:// path.
+
+    Missing destination folders are created; existing
+    files are never overwritten. Verifies by read-back
+    (destination exists, source absent). References to
+    the old path are NOT rewritten - update them with
+    find_replace_across_files or edit_script if needed.
+    Not undoable.
+    """
+
+    payload = {
+        "resource_path": resource_path,
+        "new_resource_path": new_resource_path
+    }
+
+    return _request_json(
+        endpoint="/rename_resource",
+        method="POST",
+        payload=payload
+    )
+
+
+def create_directory(directory_path):
+    """
+    Create a folder inside the project (nested parents
+    created as needed).
+
+    Fails when the path already exists as a directory
+    or as a file, so an existing folder is never
+    mistaken for a created one. Verifies by read-back.
+    Not undoable.
+    """
+
+    payload = {
+        "directory_path": directory_path
+    }
+
+    return _request_json(
+        endpoint="/create_directory",
+        method="POST",
+        payload=payload
+    )
+
+
 def scan_project_issues(
     prefix=None,
     limit=None

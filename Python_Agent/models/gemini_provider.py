@@ -288,7 +288,8 @@ def make_gemini_schema_compatible(
 
 def ask_gemini(
     conversation,
-    schema
+    schema,
+    model=None,
 ):
     """
     Send the complete agent conversation
@@ -298,6 +299,10 @@ def ask_gemini(
     Pydantic JSON Schema representation into the
     subset supported by Gemini's response_schema
     implementation.
+
+    `model` overrides the settings default so the
+    panel's per-turn model selection reaches the API
+    call; None falls back to GEMINI_MODEL.
     """
 
     global client
@@ -429,7 +434,7 @@ def ask_gemini(
 
             response = (
                 client.models.generate_content(
-                    model=GEMINI_MODEL,
+                    model=model or GEMINI_MODEL,
                     contents=conversation_prompt,
                     config=generate_content_config,
                 )

@@ -99,6 +99,9 @@ from agent.schemas import (
     SaveSceneAsAction,
     SetProjectSettingsAction,
     CreateResourceAction,
+    DeleteResourceAction,
+    RenameResourceAction,
+    CreateDirectoryAction,
     RunSceneOfflineAction,
     ScanProjectIssuesAction,
     RenameScriptAction,
@@ -771,6 +774,33 @@ def _execute_create_resource(decision):
     )
 
 
+def _execute_delete_resource(decision):
+    return scene_tools.delete_resource(
+        resource_path=(
+            decision.resource_path
+        ),
+    )
+
+
+def _execute_rename_resource(decision):
+    return scene_tools.rename_resource(
+        resource_path=(
+            decision.resource_path
+        ),
+        new_resource_path=(
+            decision.new_resource_path
+        ),
+    )
+
+
+def _execute_create_directory(decision):
+    return scene_tools.create_directory(
+        directory_path=(
+            decision.directory_path
+        ),
+    )
+
+
 def _execute_scan_project_issues(decision):
     return scene_tools.scan_project_issues(
         prefix=(
@@ -1356,6 +1386,30 @@ _ACTION_SPECS = (
         ),
         is_mutation=True,
         handler=_execute_create_resource,
+    ),
+    ActionSpec(
+        name="delete_resource",
+        schema=DeleteResourceAction,
+        required_fields=("resource_path",),
+        is_mutation=True,
+        handler=_execute_delete_resource,
+    ),
+    ActionSpec(
+        name="rename_resource",
+        schema=RenameResourceAction,
+        required_fields=(
+            "resource_path",
+            "new_resource_path",
+        ),
+        is_mutation=True,
+        handler=_execute_rename_resource,
+    ),
+    ActionSpec(
+        name="create_directory",
+        schema=CreateDirectoryAction,
+        required_fields=("directory_path",),
+        is_mutation=True,
+        handler=_execute_create_directory,
     ),
     ActionSpec(
         name="scan_project_issues",

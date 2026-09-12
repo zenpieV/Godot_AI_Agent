@@ -1093,6 +1093,10 @@ def ask_model(
             response = provider(
                 conversation=conversation,
                 schema=schema,
+                # The panel's model selector (or the
+                # settings default) must reach the
+                # actual API call, not only telemetry.
+                model=model,
             )
             result = (
                 response
@@ -3340,6 +3344,63 @@ Optional parameter:
 
 timeout (seconds per harness, 10-600, default 120)
 
+72. delete_resource
+
+Deletes an existing .tres or .res resource file and
+verifies by read-back that it is gone. File deletion
+is not undoable; scenes or resources referencing the
+path will report a missing dependency until you
+update or remove them.
+
+Required parameter:
+
+resource_path
+
+73. rename_resource
+
+Renames or moves an existing .tres or .res file to a
+new res:// path (missing destination folders are
+created). Existing files are never overwritten.
+Verifies by read-back. References to the old path
+are NOT rewritten; update them yourself if needed.
+Not undoable.
+
+Required parameters:
+
+resource_path
+new_resource_path
+
+74. create_directory
+
+Creates a folder inside the project, nested parents
+included. Fails if the path already exists as a
+folder or as a file. Verifies by read-back. Not
+undoable.
+
+Required parameter:
+
+directory_path
+
+File mutation limits:
+
+- The ONLY file operations that exist are the ones
+  documented above: create_resource, delete_resource,
+  rename_resource, create_directory, create_script,
+  create_scene, edit_script, rename_script,
+  save_scene_as, and checkpoint_restore. Everything
+  else on disk is untouchable. You cannot delete,
+  move, or rename scenes (.tscn), scripts (.gd),
+  imported assets, .uid sidecars, project.godot, or
+  anything outside res://, and no action ever
+  overwrites an existing file. When the user asks for
+  such an operation, do not promise it - say plainly
+  that it is not available.
+
+- If no registered action can accomplish the current
+  request, do not invent parameters, send empty
+  strings, or misuse an unrelated action. Return
+  final_answer that states exactly what is missing.
+
 Important rules:
 
 - Each user turn carries a MODE set by the user and
@@ -3772,7 +3833,13 @@ for step in session.iter_steps(
                     + "Return exactly ONE corrected "
                     + "AgentDecision JSON object for "
                     + "the next step: either one "
-                    + "action, or one bounded batch."
+                    + "action, or one bounded batch. "
+                    + "If no registered action can "
+                    + "accomplish the current request, "
+                    + "return final_answer stating the "
+                    + "limitation instead of proposing "
+                    + "an action with invented or empty "
+                    + "parameters."
                 ),
             }
         )

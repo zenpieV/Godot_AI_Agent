@@ -2105,3 +2105,457 @@ func create_resource_from_request(
 		"verified_properties": all_properties_verified,
 		"undoable": false
 	}
+
+
+# ==========================================
+# Resource file operations (delete / rename)
+# ==========================================
+#
+# File-level companions to create_resource. Both are
+# restricted to .tres/.res files: scenes, scripts,
+# project.godot, and imported assets can never be
+# deleted or moved through these actions. Neither is
+# undoable, so both verify by read-back and report
+# verified_* fields for the mutation contract.
+
+
+func _normalize_resource_file_for_ops(
+	raw_path,
+	action_name: String,
+	param_label: String
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_resource_file_path(
+			raw_path,
+			action_name
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var resource_path: String = (
+		path_check["resource_path"]
+	)
+
+	if (
+		not resource_path.ends_with(".tres")
+		and not resource_path.ends_with(".res")
+	):
+
+		return {
+			"success": false,
+			"error": (
+				action_name + " requires "
+				+ param_label + " to be a "
+				+ "resource file (.tres or .res)."
+			)
+		}
+
+	return {
+		"ok": true,
+		"resource_path": resource_path
+	}
+
+
+func delete_resource_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var path_check := (
+		_normalize_resource_file_for_ops(
+			data.get("resource_path"),
+			"delete_resource",
+			"resource_path"
+		)
+	)
+
+	if not path_check.get("ok", false):
+		return path_check
+
+	var resource_path: String = (
+		path_check["resource_path"]
+	)
+
+	if DirAccess.dir_exists_absolute(
+		resource_path
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"delete_resource: "
+				+ resource_path
+				+ " is a directory, not a "
+				+ "resource file."
+			)
+		}
+
+	if not FileAccess.file_exists(resource_path):
+
+		return {
+			"success": false,
+			"error": (
+				"delete_resource: resource not "
+				+ "found: "
+				+ resource_path
+			)
+		}
+
+	var removal_error: Error = (
+		DirAccess.remove_absolute(resource_path)
+	)
+
+	if removal_error != OK:
+
+		return {
+			"success": false,
+			"error": (
+				"delete_resource: removal "
+				+ "failed for "
+				+ resource_path
+				+ " (error %d)." % removal_error
+			)
+		}
+
+	if FileAccess.file_exists(resource_path):
+
+		return {
+			"success": false,
+			"error": (
+				"delete_resource: file still "
+				+ "exists after removal: "
+				+ resource_path
+			),
+			"resource_path": resource_path,
+			"verified_deleted": false,
+			"undoable": false
+		}
+
+	return {
+		"success": true,
+		"action": "delete_resource",
+		"message": (
+			"Resource file deleted and verified "
+			+ "absent. Scenes or resources "
+			+ "referencing the path now report "
+			+ "a missing dependency."
+		),
+		"resource_path": resource_path,
+		"verified_deleted": true,
+		"verified_absent": true,
+		"changed": true,
+		"undoable": false
+	}
+
+
+func rename_resource_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	var old_check := (
+		_normalize_resource_file_for_ops(
+			data.get("resource_path"),
+			"rename_resource",
+			"resource_path"
+		)
+	)
+
+	if not old_check.get("ok", false):
+		return old_check
+
+	var new_check := (
+		_normalize_resource_file_for_ops(
+			data.get("new_resource_path"),
+			"rename_resource",
+			"new_resource_path"
+		)
+	)
+
+	if not new_check.get("ok", false):
+		return new_check
+
+	var old_path: String = (
+		old_check["resource_path"]
+	)
+
+	var new_path: String = (
+		new_check["resource_path"]
+	)
+
+	if old_path == new_path:
+
+		return {
+			"success": false,
+			"error": (
+				"rename_resource: "
+				+ "new_resource_path is "
+				+ "identical to resource_path."
+			)
+		}
+
+	if not FileAccess.file_exists(old_path):
+
+		return {
+			"success": false,
+			"error": (
+				"rename_resource: resource not "
+				+ "found: "
+				+ old_path
+			)
+		}
+
+	if DirAccess.dir_exists_absolute(new_path):
+
+		return {
+			"success": false,
+			"error": (
+				"rename_resource: destination "
+				+ "already exists as a folder: "
+				+ new_path
+			)
+		}
+
+	if FileAccess.file_exists(new_path):
+
+		return {
+			"success": false,
+			"error": (
+				"rename_resource: destination "
+				+ "already exists. Existing "
+				+ "files are never overwritten: "
+				+ new_path
+			)
+		}
+
+	var target_dir: String = (
+		new_path.get_base_dir()
+	)
+
+	if (
+		not target_dir.is_empty()
+		and not DirAccess.dir_exists_absolute(
+			target_dir
+		)
+	):
+
+		DirAccess.make_dir_recursive_absolute(
+			target_dir
+		)
+
+	var rename_error: Error = (
+		DirAccess.rename_absolute(old_path, new_path)
+	)
+
+	if rename_error != OK:
+
+		return {
+			"success": false,
+			"error": (
+				"rename_resource: rename failed "
+				+ "for "
+				+ old_path
+				+ " -> "
+				+ new_path
+				+ " (error %d)." % rename_error
+			)
+		}
+
+	var verified_destination: bool = (
+		FileAccess.file_exists(new_path)
+	)
+
+	var verified_source_gone: bool = (
+		not FileAccess.file_exists(old_path)
+	)
+
+	if not (
+		verified_destination
+		and verified_source_gone
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"rename_resource: rename could "
+				+ "not be verified: "
+				+ "destination_exists="
+				+ str(verified_destination)
+				+ " source_absent="
+				+ str(verified_source_gone)
+			),
+			"resource_path": old_path,
+			"new_resource_path": new_path,
+			"undoable": false
+		}
+
+	return {
+		"success": true,
+		"action": "rename_resource",
+		"message": (
+			"Resource file renamed/moved and "
+			+ "verified by read-back. "
+			+ "References to the old path are "
+			+ "NOT rewritten and now report a "
+			+ "missing dependency."
+		),
+		"resource_path": old_path,
+		"new_resource_path": new_path,
+		"verified_moved": true,
+		"verified_destination_exists": true,
+		"verified_source_absent": true,
+		"changed": true,
+		"undoable": false
+	}
+
+
+# ==========================================
+# create_directory
+# ==========================================
+# Creates a folder inside the project (nested parents
+# included). Refuses paths that already exist as a
+# directory or a file, so the model can never mistake
+# "folder was already there" for a created folder.
+# Not undoable; verified by read-back.
+
+
+func create_directory_from_request(
+	data: Dictionary
+) -> Dictionary:
+
+	if not data.has("directory_path"):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory requires "
+				+ "directory_path."
+			)
+		}
+
+	if typeof(data["directory_path"]) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory "
+				+ "directory_path must be a "
+				+ "string."
+			)
+		}
+
+	var directory_path: String = (
+		str(data["directory_path"]).strip_edges()
+	)
+
+	if directory_path.is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory requires a "
+				+ "non-empty directory_path."
+			)
+		}
+
+	if not directory_path.begins_with("res://"):
+
+		directory_path = (
+			"res://"
+			+ directory_path
+		)
+
+	if directory_path.contains("\\"):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory "
+				+ "directory_path must use "
+				+ "forward slashes."
+			)
+		}
+
+	if directory_path.contains(".."):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory "
+				+ "directory_path must not "
+				+ "contain directory traversal."
+			)
+		}
+
+	while directory_path.ends_with("/"):
+
+		directory_path = directory_path.left(
+			directory_path.length() - 1
+		)
+
+	if directory_path.length() <= len("res://"):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory: res:// "
+				+ "itself always exists."
+			)
+		}
+
+	if DirAccess.dir_exists_absolute(directory_path):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory: directory "
+				+ "already exists: "
+				+ directory_path
+			)
+		}
+
+	if FileAccess.file_exists(directory_path):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory: a file "
+				+ "exists at that path: "
+				+ directory_path
+			)
+		}
+
+	DirAccess.make_dir_recursive_absolute(
+		directory_path
+	)
+
+	if not DirAccess.dir_exists_absolute(
+		directory_path
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"create_directory: directory "
+				+ "still missing after creation "
+				+ "attempt: "
+				+ directory_path
+			),
+			"directory_path": directory_path,
+			"undoable": false
+		}
+
+	return {
+		"success": true,
+		"action": "create_directory",
+		"message": (
+			"Directory created and verified by "
+			+ "read-back. Nested parents are "
+			+ "created as needed."
+		),
+		"directory_path": directory_path,
+		"verified_created": true,
+		"changed": true,
+		"undoable": false
+	}

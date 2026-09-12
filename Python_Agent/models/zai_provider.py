@@ -57,6 +57,7 @@ def _prepare_zai_messages(
 def ask_zai(
     conversation,
     schema,
+    model=None,
 ):
     """
     Send the current agent conversation to Z.ai.
@@ -69,6 +70,10 @@ def ask_zai(
     `schema` is intentionally accepted to preserve the
     common provider interface, even though this model
     does not enforce it remotely.
+
+    `model` overrides the settings default so the
+    panel's per-turn model selection reaches the API
+    call; None falls back to ZAI_MODEL.
     """
 
     del schema
@@ -88,7 +93,7 @@ def ask_zai(
     )
 
     payload = {
-        "model": ZAI_MODEL,
+        "model": model or ZAI_MODEL,
         "messages": messages,
         "response_format": {
             "type": "json_object",

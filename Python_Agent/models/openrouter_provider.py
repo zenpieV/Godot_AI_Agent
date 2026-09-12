@@ -65,6 +65,7 @@ def _prepare_openrouter_messages(
 def ask_openrouter(
     conversation,
     schema,
+    model=None,
 ):
     """
     Send the current agent conversation to OpenRouter.
@@ -77,6 +78,10 @@ def ask_openrouter(
     `schema` is intentionally accepted to preserve the
     common provider interface, even though this model
     does not enforce it remotely.
+
+    `model` overrides the settings default so the
+    panel's per-turn model selection reaches the API
+    call; None falls back to OPENROUTER_MODEL.
     """
 
     del schema
@@ -100,7 +105,7 @@ def ask_openrouter(
     )
 
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": model or OPENROUTER_MODEL,
         "messages": messages,
         "response_format": {
             "type": "json_object",

@@ -583,6 +583,29 @@ class CreateResourceAction(BaseAction):
 
 
 
+class DeleteResourceAction(BaseAction):
+
+    action: Literal["delete_resource"]
+
+    resource_path: str
+
+
+class RenameResourceAction(BaseAction):
+
+    action: Literal["rename_resource"]
+
+    resource_path: str
+
+    new_resource_path: str
+
+
+class CreateDirectoryAction(BaseAction):
+
+    action: Literal["create_directory"]
+
+    directory_path: str
+
+
 class RunSceneOfflineAction(BaseAction):
 
     action: Literal["run_scene_offline"]
@@ -775,6 +798,9 @@ BatchableAction = Annotated[
         SaveSceneAsAction,
         SetProjectSettingsAction,
         CreateResourceAction,
+        DeleteResourceAction,
+        RenameResourceAction,
+        CreateDirectoryAction,
         RunSceneOfflineAction,
         ScanProjectIssuesAction,
         RenameScriptAction,
@@ -906,6 +932,9 @@ AgentDecision = Annotated[
         CheckpointRestoreAction,
         RunProjectTestsAction,
         DescribeCurrentSceneAction,
+        DeleteResourceAction,
+        RenameResourceAction,
+        CreateDirectoryAction,
         BatchAction,
         FinalAnswerAction,
         ExitSessionAction,

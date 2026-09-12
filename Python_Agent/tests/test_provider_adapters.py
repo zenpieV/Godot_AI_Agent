@@ -375,6 +375,26 @@ def test_gemini_does_not_retry_non_transient_error(monkeypatch):
     assert generate_content.call_count == 1
 
 
+def test_gemini_model_override_reaches_api_call(monkeypatch):
+    """The panel's per-turn model selection must change the actual
+    request, not only the telemetry label."""
+    response = SimpleNamespace(text='{"action":"final_answer"}')
+    generate_content = Mock(return_value=response)
+    client = SimpleNamespace(
+        models=SimpleNamespace(generate_content=generate_content)
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(gemini_provider, "client", client)
+    monkeypatch.setattr(gemini_provider, "_client_initialized", True)
+
+    gemini_provider.ask_gemini(
+        CONVERSATION, {}, model="panel-selected-model"
+    )
+
+    request = generate_content.call_args.kwargs
+    assert request["model"] == "panel-selected-model"
+
+
 def test_groq_maps_messages_and_request_options(monkeypatch):
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content='{"action":"final_answer"}'))]
@@ -416,6 +436,34 @@ def test_groq_maps_messages_and_request_options(monkeypatch):
     assert "AGENT EXECUTION RESULT:" in tool_message["content"]
     assert "tool_call_id" not in tool_message
     assert "tool_calls" not in tool_message
+
+
+def test_groq_model_override_reaches_api_call(monkeypatch):
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"action":"final_answer"}'))]
+    )
+    raw_response = SimpleNamespace(
+        headers={},
+        parse=Mock(return_value=response),
+    )
+    create = Mock(return_value=raw_response)
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                with_raw_response=SimpleNamespace(create=create)
+            )
+        )
+    )
+    groq_constructor = Mock(return_value=client)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setattr(groq_provider, "Groq", groq_constructor)
+    monkeypatch.setattr(groq_provider, "_maybe_wait_for_headroom", Mock())
+
+    groq_provider.ask_groq(
+        CONVERSATION, {"ignored": True}, model="panel-selected-model"
+    )
+
+    assert create.call_args.kwargs["model"] == "panel-selected-model"
 
 
 def test_groq_request_errors_are_propagated_after_configured_retries(monkeypatch):

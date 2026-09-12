@@ -3051,3 +3051,83 @@ flow, context meter.
   (test artifact; interactive EOF is correct).
 - get_undo_history_summary_harness.gd never quits headless
   (pre-existing; skipped in batch runs).
+
+# Resource File Management Actions + Model Selection Passthrough (2026-09-12)
+
+## Scope
+
+zenpieV reported the agent apparently losing session memory: it created
+capsule_shape.tres, "moved" it by creating a duplicate inside resources/,
+then three times failed to act on "delete the older file you created" /
+"delete it" with clarification-asking answers.
+
+Diagnosis (evidence-backed, memory NOT broken):
+
+- Telemetry shows input tokens growing monotonically across turns
+  (6,731 -> 9,522 over five turns in one process that lived ~10 h), so
+  the full conversation is sent on every model call.
+- A live reproduction through the real Gemini adapter (exact message
+  templates, real system prompt, real result payloads) showed the model
+  correctly resolving "the older file you created" to
+  res://capsule_shape.tres in 3/3 attempts - then hallucinating
+  find_replace_across_files with empty strings, or admitting "no file
+  deletion tool exposed".
+- Root cause: the registry had no file-management capability. No way to
+  delete, move, or rename resource files, and no explicit create-
+  directory action. A flash-tier model covers a missing capability with
+  clarification questions, which reads as amnesia.
+
+Fixes implemented:
+
+1. Three new actions (registry now 74): delete_resource (.tres/.res
+   only; verified_absent read-back; "resource not found" on repeat),
+   rename_resource (move/rename via DirAccess.rename_absolute;
+   destination never overwritten; missing destination folders created;
+   verified_destination_exists + verified_source_absent; references NOT
+   rewritten - stated in the result), create_directory (fails when the
+   path already exists as folder or file; verified_created). All three
+   are batchable mutations with boundary fingerprints and mutation
+   targets (delete_resource/rename_resource target the source path,
+   like rename_script). All report undoable:false.
+2. Prompt-side capability honesty: a "File mutation limits" section in
+   the system prompt lists exactly which file operations exist and
+   states that scenes/scripts/imports/project.godot can never be
+   deleted/moved/renamed and nothing is ever overwritten; plus a rule
+   that when no registered action fits, the model must return
+   final_answer stating the limitation instead of inventing parameters.
+   The validation-reject result message carries the same instruction.
+3. Model selector passthrough (regression fix): ask_model computed
+   ACTIVE_MODEL but only used it for telemetry; every adapter hardcoded
+   its settings model, so the panel dropdown changed the label, not the
+   API call. All five adapters now accept model=None and fall back to
+   their settings default; ask_model passes the selected model through.
+
+## Tests
+
+Python 385 passed (new: file-op registry/schema/dispatch/batchable
+tests, gemini+groq model-override adapter tests, ask_model selection +
+settings-fallback tests). Harnesses 22/22 green including new file-op
+cases in property_tools_harness (create_directory, create_resource
+fixture, rename into missing nested folder, verified delete, duplicate/
+traversal/wrong-extension rejections, FS cleanup).
+
+## Live validation (isolated editor instance, port 8082)
+
+- Route battery via curl: 8/8 expected outcomes (create, duplicate
+  refusal, rename+auto-parent, verified delete, not-found repeat,
+  project.godot extension rejection, traversal, missing-source rename).
+- Rule 12 smoke: gemini-3.5-flash-lite accepted the converted schema
+  with the three new unions and returned a valid delete_resource
+  decision.
+- Full agent scenario in bridge mode (real model): turn 1 created a
+  resource; turn 2 "put this file in a /livecheck_resources folder"
+  executed create_directory + rename_resource (folder created, file
+  MOVED, no duplicate - the exact step that used to duplicate); turn 3
+  "delete the resource file you created" executed delete_resource
+  verified. Mutation ledger: 4/4 verified. Final answer named the exact
+  path.
+
+## Status
+
+Implemented and validated; the "amnesia" report is closed as a missing
+capability, not a context bug.
