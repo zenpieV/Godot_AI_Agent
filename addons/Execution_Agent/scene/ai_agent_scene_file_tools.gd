@@ -855,26 +855,34 @@ func get_scene_dependencies_from_request(
 
 			if property_value is Resource:
 
-				var resource_path: String = (
-					property_value.resource_path
-				)
-
-				if resource_path.is_empty():
-					continue
-
-				if resources.size() < MAX_DEPENDENCIES:
-					resources[resource_path] = (
-						node_name
-						+ "."
-						+ str(
-							state.get_node_property_name(
-								node_index,
-								property_index
+							var resource_path: String = (
+								property_value.resource_path
 							)
-						)
-					)
-				else:
-					omitted += 1
+
+							if resource_path.is_empty():
+								continue
+
+							if resources.size() < MAX_DEPENDENCIES:
+								# Collect EVERY user: keying by path
+								# alone kept only the last user,
+								# silently losing usage multiplicity.
+								var user := (
+									node_name
+									+ "."
+									+ str(
+										state.get_node_property_name(
+											node_index,
+											property_index
+										)
+									)
+								)
+								if not resources.has(resource_path):
+									resources[resource_path] = []
+								if not (resources[resource_path] as Array).has(user):
+									resources[resource_path].append(user)
+							else:
+								omitted += 1
+			
 
 	var sub_scene_list: Array = []
 
