@@ -901,6 +901,7 @@ func route_request(
 
 	return {
 		"success": false,
+		"_http_status": 404,
 		"error": (
 			"Unknown endpoint: "
 			+ method
@@ -957,6 +958,7 @@ func parse_request_json(
 
 		return {
 			"success": false,
+			"_http_status": 400,
 			"error": (
 				"Invalid JSON request body."
 			)
@@ -970,6 +972,7 @@ func parse_request_json(
 
 		return {
 			"success": false,
+			"_http_status": 400,
 			"error": (
 				"Request JSON must be an object."
 			)

@@ -297,7 +297,12 @@ func _process(
 	_delta: float
 ) -> void:
 
-	if tcp_server.is_connection_available():
+	# Drain every pending connection this frame: one
+	# take_connection per frame starves under bursts
+	# (the UI's input submit + event pushes arrive
+	# back-to-back).
+
+	while tcp_server.is_connection_available():
 
 		var peer: StreamPeerTCP = (
 			tcp_server.take_connection()
