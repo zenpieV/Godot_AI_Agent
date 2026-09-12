@@ -658,32 +658,72 @@ func set_properties_from_request(
 
 	var response_properties := []
 
+	var all_verified := true
+
 	for change in prepared_changes:
+
+		# Read-back verification: the ACTUAL value on the
+		# node is what gets reported and compared - a
+		# coerced or silently-rejected assignment can no
+		# longer masquerade as an exact success.
+
+		var actual_value = (
+			target_node.get(change["name"])
+		)
+
+		var old_value_serialized = (
+			variant_serializer
+			.serialize_property_value(
+				change["old_value"]
+			)
+		)
+
+		var requested_value_serialized = (
+			variant_serializer
+			.serialize_property_value(
+				change["new_value"]
+			)
+		)
+
+		var actual_value_serialized = (
+			variant_serializer
+			.serialize_property_value(
+				actual_value
+			)
+		)
+
+		var property_verified: bool = (
+			actual_value_serialized
+			== requested_value_serialized
+		)
+
+		if not property_verified:
+			all_verified = false
 
 		response_properties.append(
 			{
 				"name": change["name"],
-				"old_value": (
-					variant_serializer
-					.serialize_property_value(
-						change["old_value"]
-					)
-				),
+				"old_value": old_value_serialized,
 				"new_value": (
-					variant_serializer
-					.serialize_property_value(
-						change["new_value"]
-					)
-				)
+					requested_value_serialized
+				),
+				"actual_value": (
+					actual_value_serialized
+				),
+				"verified": property_verified
 			}
 		)
 
 	return {
-		"success": true,
+		"success": all_verified,
 		"action": "set_properties",
 		"message": (
 			"Node properties updated successfully "
 			+ "in the Godot editor."
+			if all_verified
+			else "Some properties did not retain "
+			+ "the requested value after the write "
+			+ "(see verified flags per property)."
 		),
 		"node_path": (
 			scene_helpers
@@ -701,6 +741,7 @@ func set_properties_from_request(
 		"property_count": (
 			response_properties.size()
 		),
+		"verified_all": all_verified,
 		"properties": response_properties,
 		"undoable": true
 	}
@@ -761,6 +802,18 @@ func build_property_metadata(
 
 		metadata[property_name] = {
 			"type_id": property_type,
+			"hint": int(
+				property_info.get(
+					"hint",
+					PROPERTY_HINT_NONE
+				)
+			),
+			"hint_string": str(
+				property_info.get(
+					"hint_string",
+					""
+				)
+			),
 			"editable": (
 				not is_read_only
 			)
@@ -1154,6 +1207,39 @@ func assign_resource_to_property_from_request(
 			)
 		}
 
+	# Resource-type hint check: refuse assignments the
+	# property can never accept (e.g. a Texture2D into
+	# an AudioStream property) instead of reporting a
+	# dead-on-arrival verified:false later. A property
+	# with hint PROPERTY_HINT_RESOURCE_TYPE (23) names
+	# the accepted base class in hint_string.
+
+	var hint: int = int(
+		metadata.get("hint", PROPERTY_HINT_NONE)
+	)
+
+	if (
+		hint == PROPERTY_HINT_RESOURCE_TYPE
+		and not ClassDB.is_parent_class(
+			(loaded as Resource).get_class(),
+			str(metadata.get("hint_string", ""))
+		)
+	):
+
+		return {
+			"success": false,
+			"error": (
+				"assign_resource_to_property: "
+				+ "property "
+				+ property_name
+				+ " expects a "
+				+ str(metadata.get("hint_string", ""))
+				+ " but "
+				+ (loaded as Resource).get_class()
+				+ " was provided."
+			)
+		}
+
 	var old_value: Variant = (
 		target_node.get(property_name)
 	)
@@ -1441,6 +1527,44 @@ func set_project_settings_from_request(
 						+ ")."
 					)
 				}
+
+	# Whitelist guard: the key must be a KNOWN
+	# ProjectSettings entry. Without this, a typo'd key is
+	# silently created, persisted into project.godot on
+	# the next save, and reported as verified. Autoload
+	# registrations and input actions are still writable
+	# (they are registered by ProjectSettings itself).
+
+	var known_setting_keys := {}
+
+	for property_info in ProjectSettings.get_property_list():
+
+		known_setting_keys[
+			str(property_info.get("name", ""))
+		] = true
+
+	for setting_name in requested:
+
+		var key := str(setting_name).strip_edges()
+
+		if (
+			not known_setting_keys.has(key)
+			and not key.begins_with("autoload/")
+			and not key.begins_with("input/")
+			and not key.begins_with("layer_names/")
+		):
+
+			return {
+				"success": false,
+				"error": (
+					"set_project_settings: unknown "
+					+ "setting key: "
+					+ key
+					+ ". Use get_project_settings "
+					+ "with a prefix to discover valid "
+					+ "keys."
+				)
+			}
 
 	# Validate and prepare every change BEFORE applying
 	# any of them, mirroring set_properties.
@@ -1764,6 +1888,18 @@ func create_resource_from_request(
 	# Validate and prepare all properties before applying
 	# any, mirroring set_properties.
 
+	# Property usage map: `key in resource` accepts
+	# read-only properties whose set() is silently
+	# ignored, so editability is checked explicitly.
+
+	var resource_property_usage := {}
+
+	for property_info in resource.get_property_list():
+
+		resource_property_usage[
+			str(property_info.get("name", ""))
+		] = int(property_info.get("usage", 0))
+
 	var prepared: Array = []
 
 	for property_name in requested:
@@ -1784,13 +1920,29 @@ func create_resource_from_request(
 		# Object.set() silently ignores them, which would
 		# make a "created" resource silently wrong.
 
-		if not (key in resource):
+		if not resource_property_usage.has(key):
 
 			return {
 				"success": false,
 				"error": (
 					"Property not found on resource "
 					+ "type "
+					+ resource_type
+					+ ": "
+					+ key
+				)
+			}
+
+		if (
+			int(resource_property_usage[key])
+			& PROPERTY_USAGE_READ_ONLY
+		) != 0:
+
+			return {
+				"success": false,
+				"error": (
+					"Property is read-only on "
+					+ "resource type "
 					+ resource_type
 					+ ": "
 					+ key
@@ -1884,8 +2036,10 @@ func create_resource_from_request(
 			)
 		}
 
-	# Post-create verification: load the file back and
-	# confirm the resource type.
+	# Post-create verification: load the file back,
+	# confirm the resource type, and read back EVERY
+	# prepared property - a dropped or coerced property
+	# must not report as a fully successful creation.
 
 	var verify_load: Variant = load(resource_path)
 
@@ -1894,15 +2048,44 @@ func create_resource_from_request(
 		and verify_load.get_class() == resource_type
 	)
 
-	# Soft convention nudge: root placement is legal but
-	# usually a mistake for resources.
+	var all_properties_verified: bool = verified_write
+
+	if verified_write:
+
+		for change in prepared:
+
+			var readback: Variant = (
+				(verify_load as Resource).get(
+					change["key"]
+				)
+			)
+
+			var expected_serialized: String = str(
+				variant_serializer
+				.serialize_property_value(
+					change["value"]
+				)
+			)
+
+			var actual_serialized: String = str(
+				variant_serializer
+				.serialize_property_value(
+					readback
+				)
+			)
+
+			if actual_serialized != expected_serialized:
+
+				all_properties_verified = false
+
+				break
 
 	var root_hint: bool = (
 		resource_path.get_base_dir() == "res://"
 	)
 
 	return {
-		"success": true,
+		"success": verified_write and all_properties_verified,
 		"action": "create_resource",
 		"message": (
 			"Resource created successfully in the "
@@ -1919,5 +2102,6 @@ func create_resource_from_request(
 		"root_directory_hint": root_hint,
 		"changed": true,
 		"verified_write": verified_write,
+		"verified_properties": all_properties_verified,
 		"undoable": false
 	}

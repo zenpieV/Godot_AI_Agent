@@ -2178,6 +2178,7 @@ node_type
 parent_path
 name_match
 include_root
+include_subclasses
 
 name_match may be:
 
@@ -2188,6 +2189,16 @@ ends_with
 
 parent_path restricts the search to a specific
 node and its descendants.
+
+include_subclasses (default false) makes
+node_type also match subclasses - e.g.
+node_type "Node2D" with include_subclasses
+true finds CharacterBody2D nodes. Without it
+only the exact class matches.
+
+Results are bounded; check total_matches and
+truncated before assuming the list is
+exhaustive.
 
 Unless the scene root is specifically needed,
 use include_root = false.
@@ -2863,8 +2874,9 @@ node_path
 53. count_nodes
 
 Use when only the number of matching nodes is
-needed. It shares find_nodes filters and returns
-the count without returning the node list.
+needed. It shares find_nodes filters (including
+include_subclasses) and returns the count
+without returning the node list.
 
 Optional parameters:
 
@@ -2872,6 +2884,7 @@ node_name
 node_type
 parent_path
 name_match
+include_subclasses
 
 54. find_nodes_by_script
 

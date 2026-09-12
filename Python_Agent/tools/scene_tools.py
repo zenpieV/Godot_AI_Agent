@@ -142,7 +142,8 @@ def find_nodes(
     node_type=None,
     parent_path=None,
     name_match="exact",
-    include_root=False
+    include_root=False,
+    include_subclasses=False
 ):
     """
     Search the currently edited Godot scene.
@@ -170,6 +171,16 @@ def find_nodes(
         include_root:
             Whether the edited scene root may be
             included in the results.
+
+        include_subclasses:
+            When true, the node_type filter also
+            matches subclasses (e.g. node_type
+            "Node2D" finds CharacterBody2D).
+            Defaults to exact-class matching.
+
+    Results are bounded (see limit/truncated in the
+    response); check total_matches before assuming an
+    exhaustive list.
     """
 
     payload = {
@@ -177,7 +188,8 @@ def find_nodes(
         "node_type": node_type,
         "parent_path": parent_path,
         "name_match": name_match,
-        "include_root": include_root
+        "include_root": include_root,
+        "include_subclasses": include_subclasses
     }
 
     return _request_json(
@@ -192,27 +204,21 @@ def count_nodes(
     node_type=None,
     parent_path=None,
     name_match="exact",
+    include_subclasses=False
 ):
     """
     Count the nodes in the currently edited Godot
     scene matching the same filter semantics as
-    find_nodes, without returning the node list.
-
-    Use this instead of find_nodes when only the
-    number of matching nodes is needed, e.g.
-    "how many enemies exist?" or "are there at
-    least 5 triggers?".
-
-    The bridge is authoritative: the count comes
-    from a real traversal of the currently edited
-    scene.
+    find_nodes (including include_subclasses),
+    without returning the node list.
     """
 
     payload = {
         "node_name": node_name,
         "node_type": node_type,
         "parent_path": parent_path,
-        "name_match": name_match
+        "name_match": name_match,
+        "include_subclasses": include_subclasses
     }
 
     return _request_json(

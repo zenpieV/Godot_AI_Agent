@@ -673,6 +673,7 @@ DISPATCH_CASES = [
             "parent_path": None,
             "name_match": "exact",
             "include_root": False,
+            "include_subclasses": False,
         },
     ),
     (
@@ -683,6 +684,7 @@ DISPATCH_CASES = [
             node_type="Sprite2D",
             name_match="contains",
             include_root=True,
+            include_subclasses=True,
         ),
         "find_nodes",
         {
@@ -691,6 +693,7 @@ DISPATCH_CASES = [
             "parent_path": None,
             "name_match": "contains",
             "include_root": True,
+            "include_subclasses": True,
         },
     ),
     (
@@ -704,6 +707,7 @@ DISPATCH_CASES = [
             "node_type": None,
             "parent_path": None,
             "name_match": "exact",
+            "include_subclasses": False,
         },
     ),
     (
@@ -714,6 +718,7 @@ DISPATCH_CASES = [
             node_type="Area2D",
             parent_path="Level",
             name_match="starts_with",
+            include_subclasses=True,
         ),
         "count_nodes",
         {
@@ -721,6 +726,7 @@ DISPATCH_CASES = [
             "node_type": "Area2D",
             "parent_path": "Level",
             "name_match": "starts_with",
+            "include_subclasses": True,
         },
     ),
     (

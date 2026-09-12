@@ -4,6 +4,13 @@ extends RefCounted
 class_name AIAgentNodeTools
 
 
+# Bounded-output cap for find_nodes / find_nodes_by_script
+# / find_nodes_by_group: beyond this the response reports
+# total_matches + truncated instead of dumping nodes.
+
+const FIND_NODES_MAX_RESULTS := 200
+
+
 var scene_helpers: AIAgentSceneHelpers
 var undo_redo: EditorUndoRedoManager
 
@@ -279,6 +286,10 @@ func find_nodes_from_request(
 		filters["include_root"]
 	)
 
+	var include_subclasses: bool = (
+		filters["include_subclasses"]
+	)
+
 	var scene_result: Dictionary = (
 		scene_helpers
 		.get_edited_scene_root_or_error()
@@ -338,19 +349,40 @@ func find_nodes_from_request(
 		node_name_filter,
 		node_type_filter,
 		name_match,
-		include_root
+		include_root,
+		"",
+		"",
+		include_subclasses
 	)
+
+	# Bounded output: never dump an unbounded node list
+	# into the conversation. total_matches preserves the
+	# true count; truncated says so.
+
+	var total_matches := matching_nodes.size()
+
+	var truncated := total_matches > FIND_NODES_MAX_RESULTS
 
 	return {
 		"success": true,
 		"action": "find_nodes",
-		"count": matching_nodes.size(),
+		"count": matching_nodes.slice(
+			0,
+			FIND_NODES_MAX_RESULTS
+		).size(),
+		"total_matches": total_matches,
+		"truncated": truncated,
+		"limit": FIND_NODES_MAX_RESULTS,
 		"node_name_filter": node_name_filter,
 		"node_type_filter": node_type_filter,
 		"parent_path_filter": parent_path_filter,
 		"name_match": name_match,
 		"include_root": include_root,
-		"nodes": matching_nodes
+		"include_subclasses": include_subclasses,
+		"nodes": matching_nodes.slice(
+			0,
+			FIND_NODES_MAX_RESULTS
+		)
 	}
 
 
@@ -408,9 +440,32 @@ func _parse_find_node_filters(
 
 	if data.has("include_root"):
 
-		include_root = bool(
-			data["include_root"]
-		)
+		if typeof(data["include_root"]) != TYPE_BOOL:
+
+			return {
+				"valid": false,
+				"error": (
+					"include_root must be a boolean."
+				)
+			}
+
+		include_root = data["include_root"]
+
+	var include_subclasses := false
+
+	if data.has("include_subclasses"):
+
+		if typeof(data["include_subclasses"]) != TYPE_BOOL:
+
+			return {
+				"valid": false,
+				"error": (
+					"include_subclasses must be a "
+					+ "boolean."
+				)
+			}
+
+		include_subclasses = data["include_subclasses"]
 
 	var valid_name_match_modes := [
 		"exact",
@@ -440,7 +495,8 @@ func _parse_find_node_filters(
 		"node_type_filter": node_type_filter,
 		"parent_path_filter": parent_path_filter,
 		"name_match": name_match,
-		"include_root": include_root
+		"include_root": include_root,
+		"include_subclasses": include_subclasses
 	}
 
 
@@ -543,7 +599,10 @@ func count_nodes_from_request(
 		node_name_filter,
 		node_type_filter,
 		name_match,
-		false
+		false,
+		"",
+		"",
+		filters["include_subclasses"]
 	)
 
 	return {
@@ -566,7 +625,8 @@ func collect_matching_nodes(
 	name_match: String,
 	include_root: bool,
 	script_path_filter: String = "",
-	group_name_filter: String = ""
+	group_name_filter: String = "",
+	include_subclasses: bool = false
 ) -> void:
 
 	var is_root := (
@@ -602,10 +662,23 @@ func collect_matching_nodes(
 
 		if not node_type_filter.is_empty():
 
-			type_matches = (
-				current_node.get_class()
-				== node_type_filter
-			)
+			if include_subclasses:
+
+				type_matches = (
+					ClassDB.is_parent_class(
+						current_node.get_class(),
+						node_type_filter
+					)
+					or current_node.get_class()
+					== node_type_filter
+				)
+
+			else:
+
+				type_matches = (
+					current_node.get_class()
+					== node_type_filter
+				)
 
 		if not script_path_filter.is_empty():
 
@@ -760,9 +833,32 @@ func create_node_from_request(
 		str(data["node_type"])
 	)
 
+	# Strict name validation: a null or empty name would
+	# create an unresolvable node path.
+
+	if typeof(data["node_name"]) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				"create_node node_name must be "
+				+ "a string."
+			)
+		}
+
 	var node_name: String = (
-		str(data["node_name"])
+		data["node_name"]
 	)
+
+	if node_name.strip_edges().is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"create_node requires a non-empty "
+				+ "node_name."
+			)
+		}
 
 	var parent_result: Dictionary = (
 		scene_helpers
@@ -963,9 +1059,29 @@ func rename_node_from_request(
 		str(data["node_path"])
 	)
 
+	if typeof(data["new_name"]) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				"rename_node new_name must be "
+				+ "a string."
+			)
+		}
+
 	var new_name: String = (
-		str(data["new_name"])
+		data["new_name"]
 	)
+
+	if new_name.strip_edges().is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"rename_node requires a non-empty "
+				+ "new_name."
+			)
+		}
 
 	var node_result: Dictionary = (
 		scene_helpers
@@ -1177,15 +1293,36 @@ func delete_node_from_request(
 
 	undo_redo.commit_action()
 
+	# Post-mutation verification: the node must actually
+	# be gone from its parent, and the parent index must
+	# be back within bounds.
+
+	var verified_deleted: bool = (
+		parent_node.get_child_count() == 0
+		or parent_node.get_child(
+			mini(child_index, parent_node.get_child_count() - 1)
+		) != target_node
+	)
+
+	var verified_absent: bool = (
+		not edited_scene_root.is_ancestor_of(target_node)
+		and target_node.get_parent() != parent_node
+	)
+
 	return {
-		"success": true,
+		"success": verified_deleted and verified_absent,
 		"action": "delete_node",
 		"message": (
 			"Node deleted successfully "
 			+ "from the Godot editor."
+			if verified_deleted and verified_absent
+			else "Delete executed but verification "
+			+ "could not confirm the removal."
 		),
 		"deleted_node": target_name,
 		"node_path": node_path,
+		"verified_deleted": verified_deleted,
+		"verified_absent": verified_absent,
 		"undoable": true
 	}
 
@@ -2512,34 +2649,39 @@ func _resolve_connection_nodes(
 	# The bridge is the authoritative environment for
 	# validating Godot wiring: never connect a signal
 	# that does not exist or a method that cannot be
-	# called.
+	# called. DISCONNECT deliberately skips these gates:
+	# its whole purpose is removing stale connections
+	# whose signal or method no longer exists after a
+	# script edit.
 
-	if not emitter_node.has_signal(signal_name):
+	if action_name != "disconnect_signal":
 
-		return {
-			"success": false,
-			"error": (
-				action_name + ": node "
-				+ str(emitter_node.name)
-				+ " has no signal named "
-				+ signal_name
-				+ ". Use list_node_signals to "
-				+ "discover valid signal names."
-			)
-		}
+		if not emitter_node.has_signal(signal_name):
 
-	if not target_node.has_method(method_name):
+			return {
+				"success": false,
+				"error": (
+					action_name + ": node "
+					+ str(emitter_node.name)
+					+ " has no signal named "
+					+ signal_name
+					+ ". Use list_node_signals to "
+					+ "discover valid signal names."
+				)
+			}
 
-		return {
-			"success": false,
-			"error": (
-				action_name + ": node "
-				+ str(target_node.name)
-				+ " has no method named "
-				+ method_name
-				+ "."
-			)
-		}
+		if not target_node.has_method(method_name):
+
+			return {
+				"success": false,
+				"error": (
+					action_name + ": node "
+					+ str(target_node.name)
+					+ " has no method named "
+					+ method_name
+					+ "."
+				)
+			}
 
 	return {
 		"ok": true,
@@ -2945,9 +3087,29 @@ func duplicate_node_from_request(
 		str(data["new_parent_path"])
 	)
 
+	if typeof(data["new_name"]) != TYPE_STRING:
+
+		return {
+			"success": false,
+			"error": (
+				"duplicate_node new_name must be "
+				+ "a string."
+			)
+		}
+
 	var new_name: String = (
-		str(data["new_name"])
+		data["new_name"]
 	)
+
+	if new_name.strip_edges().is_empty():
+
+		return {
+			"success": false,
+			"error": (
+				"duplicate_node requires a non-empty "
+				+ "new_name."
+			)
+		}
 
 	var node_result: Dictionary = (
 		scene_helpers
@@ -3938,8 +4100,20 @@ func find_nodes_by_script_from_request(
 		"success": true,
 		"action": "find_nodes_by_script",
 		"script_path": script_path,
-		"count": matching_nodes.size(),
-		"nodes": matching_nodes
+		"count": matching_nodes.slice(
+			0,
+			FIND_NODES_MAX_RESULTS
+		).size(),
+		"total_matches": matching_nodes.size(),
+		"truncated": (
+			matching_nodes.size()
+			> FIND_NODES_MAX_RESULTS
+		),
+		"limit": FIND_NODES_MAX_RESULTS,
+		"nodes": matching_nodes.slice(
+			0,
+			FIND_NODES_MAX_RESULTS
+		)
 	}
 
 # ==========================================
@@ -4014,8 +4188,20 @@ func find_nodes_by_group_from_request(
 		"success": true,
 		"action": "find_nodes_by_group",
 		"group_name": group_name,
-		"count": matching_nodes.size(),
-		"nodes": matching_nodes
+		"count": matching_nodes.slice(
+			0,
+			FIND_NODES_MAX_RESULTS
+		).size(),
+		"total_matches": matching_nodes.size(),
+		"truncated": (
+			matching_nodes.size()
+			> FIND_NODES_MAX_RESULTS
+		),
+		"limit": FIND_NODES_MAX_RESULTS,
+		"nodes": matching_nodes.slice(
+			0,
+			FIND_NODES_MAX_RESULTS
+		)
 	}
 # ==========================================
 # get_project_settings

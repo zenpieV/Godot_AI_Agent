@@ -156,6 +156,11 @@ def _execute_find_nodes(decision):
             if decision.include_root is not None
             else False
         ),
+        include_subclasses=(
+            decision.include_subclasses
+            if decision.include_subclasses is not None
+            else False
+        ),
     )
 
 
@@ -173,6 +178,11 @@ def _execute_count_nodes(decision):
         name_match=(
             decision.name_match
             or "exact"
+        ),
+        include_subclasses=(
+            decision.include_subclasses
+            if decision.include_subclasses is not None
+            else False
         ),
     )
 

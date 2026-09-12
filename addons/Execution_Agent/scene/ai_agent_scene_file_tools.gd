@@ -242,10 +242,6 @@ func save_scene_from_request(
 			)
 		}
 
-	var modified_before: int = (
-		FileAccess.get_modified_time(scene_path)
-	)
-
 	var save_error := editor_interface.save_scene()
 
 	if save_error != OK:
@@ -259,9 +255,13 @@ func save_scene_from_request(
 			)
 		}
 
-	# Post-save verification: the file exists and its
-	# modification time advanced past the pre-save stamp
-	# (0 when the file did not exist before).
+	# Post-save verification: save_scene's Error return is
+	# the authoritative write signal (a failed write
+	# returns non-OK and never reaches this point), and
+	# the file must exist on disk. The mtime comparison
+	# is intentionally NOT load-bearing: it has
+	# whole-second granularity, so two saves within one
+	# second would false-negative.
 
 	var modified_after: int = (
 		FileAccess.get_modified_time(scene_path)
@@ -269,18 +269,21 @@ func save_scene_from_request(
 
 	var verified_write: bool = (
 		FileAccess.file_exists(scene_path)
-		and modified_after > modified_before
 	)
 
 	return {
-		"success": true,
+		"success": verified_write,
 		"action": "save_scene",
 		"message": (
 			"Scene saved successfully in the "
 			+ "Godot editor."
+			if verified_write
+			else "save_scene reported success but "
+			+ "the scene file is missing on disk."
 		),
 		"scene_path": scene_path,
 		"scene_name": str(edited_scene_root.name),
+		"modified_time": modified_after,
 		"changed": true,
 		"verified_write": verified_write,
 		"undoable": false
@@ -735,12 +738,19 @@ func instantiate_scene_from_request(
 		and instanced.scene_file_path == scene_path
 	)
 
+	# Success policy: an unverified instance is a failure
+	# (the undo already ran with the action; the agent
+	# must know the child did not land).
+
 	return {
-		"success": true,
+		"success": verified_instance,
 		"action": "instantiate_scene",
 		"message": (
 			"Scene instanced successfully in the "
 			+ "Godot editor."
+			if verified_instance
+			else "instantiate_scene could not verify "
+			+ "the instanced child after the commit."
 		),
 		"scene_path": scene_path,
 		"parent_path": parent_path,
@@ -1141,13 +1151,24 @@ func open_scene_from_request(
 		and new_root.scene_file_path == scene_path
 	)
 
+	# Success policy: a context switch that could not be
+	# verified is a failure - reporting success while the
+	# editor still shows the old scene (or no scene at
+	# all) makes every node path the conversation holds
+	# silently invalid.
+
 	return {
-		"success": true,
+		"success": verified_open,
 		"action": "open_scene",
 		"message": (
 			"Scene opened successfully. All node paths "
 			+ "from the previous scene are invalid; "
 			+ "re-inspect before mutating."
+			if verified_open
+			else "open_scene could not verify the "
+			+ "edited scene after the switch; the "
+			+ "editor context is unchanged or "
+			+ "unknown."
 		),
 		"scene_path": scene_path,
 		"previous_scene": previous_path,

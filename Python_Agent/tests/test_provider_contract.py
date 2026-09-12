@@ -1221,6 +1221,7 @@ def test_count_nodes_registry_dispatch_resolves(agent_module, monkeypatch):
         node_type="Area2D",
         parent_path="Level",
         name_match="contains",
+        include_subclasses=False,
     )
 
 
@@ -1265,6 +1266,7 @@ def test_count_nodes_bridge_success_passthrough(
         node_type="Area2D",
         parent_path="Level",
         name_match="exact",
+        include_subclasses=False,
     )
 
 
@@ -1303,6 +1305,7 @@ def test_count_nodes_missing_parent_failure_passthrough(
         node_type=None,
         parent_path="MissingLevel",
         name_match="exact",
+        include_subclasses=False,
     )
 
 

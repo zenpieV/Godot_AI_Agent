@@ -55,6 +55,8 @@ class FindNodesAction(BaseAction):
 
     include_root: Optional[bool] = None
 
+    include_subclasses: Optional[bool] = None
+
 
 class CountNodesAction(BaseAction):
 
@@ -73,6 +75,8 @@ class CountNodesAction(BaseAction):
             "ends_with",
         ]
     ] = None
+
+    include_subclasses: Optional[bool] = None
 
 
 class FindNodesByScriptAction(BaseAction):
