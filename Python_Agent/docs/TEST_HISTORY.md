@@ -3131,3 +3131,100 @@ traversal/wrong-extension rejections, FS cleanup).
 
 Implemented and validated; the "amnesia" report is closed as a missing
 capability, not a context bug.
+
+# Session Isolation: Fresh Context on Every Session Start (2026-09-12, zenpieV report)
+
+## Scope
+
+zenpieV reported that after `/exit` -> START SESSION the new session
+still showed old turns, turn numbers did not reset, and the agent
+"remembered" previous turns. Requirement: every session start must
+produce a completely fresh agent context and a reset panel - no
+matter which start path is used.
+
+Diagnosis:
+
+- The ideal flow was verified clean in isolation (fresh process =
+  fresh conversation; `session_started` resets chat, turn numbers,
+  metrics, events; the mutation ledger intentionally survives as a
+  project-level audit trail).
+- The failure mode is a STALE AGENT PROCESS still alive when a new
+  session starts. The store had no notion of which session owned an
+  event or a poll, so a stale process could keep consuming the FIFO
+  (it answers with old context and continuing turn numbers) and
+  paint its events into the new session's UI. Paths that produce
+  this: an editor restart/plugin reload (store resets to
+  `session_id=""` so START SESSION is allowed while the old process
+  lives), closing the agent console without `session_ended`, or
+  pressing START SESSION before the previous process finished
+  exiting.
+- Related gaps: the FIRST turn had no `/exit`/empty guard (a stale
+  `/exit` in the queue would be answered as a conversational turn by
+  a fresh session), and New Session depended on the old process
+  consuming a queued `/exit` before respawning.
+
+Fixes (session supersede):
+
+1. Every `GET /agent_input` poll carries `?session_id=<id>`. The
+   store answers `superseded: true` when the poller's session is
+   not the active one; `bridge_input.read_request()` then raises
+   `SessionSuperseded` and the agent terminates itself
+   (`termination=superseded_by_new_session`, full telemetry
+   summary). A stale process can therefore never race the live
+   session for requests - at most one live session exists.
+2. Every UI event now carries the emitting process's `session_id`;
+   the store drops events from any other session (no chat,
+   timeline, or metric pollution).
+3. `mark_session_starting()` clears the pending-request FIFO, and
+   while `session_starting` is true no poller is served input: the
+   old process cannot start new work during the handover and the
+   incoming fresh process (whose `session_started` has not landed
+   yet) is served "not ready" instead of "superseded" - it can
+   never kill itself in a race with its own announcement.
+4. New Session now spawns the fresh process IMMEDIATELY (no
+   `/exit` handoff, `respawn_pending` removed); the old process
+   exits itself via the supersede mechanism. START SESSION uses
+   the same authoritative spawn.
+5. The FIRST turn mirrors `begin_next_turn`'s guards: a stale
+   `/exit`, an empty request, EOF, or supersession terminate the
+   process before any conversational turn exists.
+6. Router: query strings are stripped and parsed once so route
+   matching stays exact.
+
+## Tests
+
+Python 389 passed (new: superseded parsing + session_id query
+propagation, SessionSuperseded raise, reporter session_id
+envelope). Harnesses 22/22 including new session-isolation cases
+(superseded poll consumes nothing, foreign-session events dropped,
+STARTING freeze, fresh `session_started` resets chat/turns/events
+and wipes the queue, old id stale afterwards).
+
+## Live validation (isolated editor instance, port 8083)
+
+- Stale-process supersede: an agent polling from an earlier
+  registration exited itself within one poll cycle (~0.4 s) of a
+  new `session_started`; its log shows
+  `termination=superseded_by_new_session`.
+- Immediate spawn while a session was mid-life (New Session
+  semantics): the old session terminated via supersede, the panel
+  store showed 0 chat turns, and the fresh session's first turn
+  was numbered 1.
+- Stale `/exit` queued with no agent alive: wiped by the fresh
+  session's `session_started` reset; the fresh session started
+  with 0 turns and never answered the `/exit` conversationally.
+- Normal `/exit` unchanged: `terminated by user`, session_ended
+  delivered.
+
+## Environment note
+
+During validation, a zombie editor from an earlier livecheck
+(different throwaway dir, old code) was found holding the target
+port and serving stale plugin code - every probe silently hit it.
+Before any port-based livecheck, verify the listener identity
+(PID -> command line) and kill leftovers.
+
+## Status
+
+Implemented and validated; every session start is authoritative
+and starts with zero context overlap.

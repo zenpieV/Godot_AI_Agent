@@ -17,6 +17,7 @@ from models.groq_provider import GROQ_MODEL
 import json
 import os
 import re
+import sys
 import logging
 import uuid
 import time
@@ -38,6 +39,7 @@ from agent.telemetry import (
 )
 
 from agent.registry import ACTION_REGISTRY
+from agent.bridge_input import SessionSuperseded
 from agent.mutation import (
     build_mutation_record,
     is_mutation_action,
@@ -1740,6 +1742,13 @@ from agent.ui_reporter import UiReporter
 
 UI_REPORTER = UiReporter()
 
+# Every UI event carries the session id so the plugin's
+# state store can discard events from a superseded agent
+# process (an older session that is still exiting) instead
+# of letting them leak into the active session's UI.
+
+UI_REPORTER.session_id = session_id
+
 _UI_MODEL_LABELS = {
     "gemini": getattr(_ui_settings, "GEMINI_MODEL", "gemini"),
     "groq": getattr(_ui_settings, "GROQ_MODEL", "groq"),
@@ -1846,7 +1855,13 @@ def read_user_request():
 
     from agent.bridge_input import read_request
 
-    result = read_request()
+    # Every poll identifies its session: when a newer
+    # session has claimed the bridge, the poll answers
+    # superseded and read_request raises SessionSuperseded
+    # so this (older) process terminates instead of racing
+    # the live session for queued requests.
+
+    result = read_request(session_id=session_id)
 
     apply_ui_model_selection(
         result["selected_provider"],
@@ -2084,6 +2099,17 @@ class AgentSession:
                 "ended (EOF)."
             )
             return False
+        except SessionSuperseded:
+            # A newer session (START SESSION, New Session,
+            # manual spawn) has claimed the bridge: this
+            # older process must exit without consuming
+            # anything, so the fresh session starts clean.
+            self.terminate("superseded_by_new_session")
+            self.logger.info(
+                "Agent session terminated: superseded by "
+                "a newer session."
+            )
+            return False
 
         if next_request.strip() == self.TERMINATION_COMMAND:
             self.terminate()
@@ -2212,7 +2238,68 @@ class AgentSession:
 # 6. Get user request
 # ==========================================
 
-user_request, first_turn_mode = read_user_request()
+# The FIRST turn mirrors begin_next_turn's guards: a
+# stale "/exit" or empty request sitting in the input
+# queue (or a superseding newer session) must terminate
+# this process immediately instead of being answered as
+# a conversational turn by a session that has not even
+# started yet.
+
+try:
+
+    user_request, first_turn_mode = read_user_request()
+
+except EOFError:
+
+    UI_REPORTER.report(
+        "session_ended",
+        reason="input_stream_ended_before_first_turn",
+        turns_completed=0,
+    )
+
+    print(
+        "\nAgent session ended: input stream ended "
+        "before the first turn."
+    )
+
+    sys.exit(0)
+
+except SessionSuperseded:
+
+    UI_REPORTER.report(
+        "session_ended",
+        reason="superseded_by_new_session",
+        turns_completed=0,
+    )
+
+    print(
+        "\nAgent session superseded by a newer "
+        "session; exiting."
+    )
+
+    sys.exit(0)
+
+
+if (
+    not user_request.strip()
+    or user_request.strip() == AgentSession.TERMINATION_COMMAND
+):
+
+    UI_REPORTER.report(
+        "session_ended",
+        reason=(
+            "exit_before_first_turn"
+            if user_request.strip()
+            else "empty_first_request"
+        ),
+        turns_completed=0,
+    )
+
+    print(
+        "\nAgent session ended before the first turn."
+    )
+
+    sys.exit(0)
 
 
 logger.info(

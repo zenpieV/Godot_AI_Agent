@@ -316,6 +316,119 @@ func _run_control_channel_cases() -> void:
 	print("control channel cases passed")
 
 
+func _run_session_isolation_cases() -> void:
+	# Session isolation: a fresh session must start with no
+	# context overlap, no matter which start path spawned
+	# it. Three guards work together: superseded polls for
+	# stale processes, the STARTING input freeze, and
+	# session-id event filtering.
+
+	store = AIAgentStateStoreScript.new()
+
+	# 1. A session claims the bridge via session_started.
+	store.apply_event(
+		{
+			"event": "session_started",
+			"session_id": "sess-a",
+		}
+	)
+	assert(store.session_id == "sess-a")
+
+	store.submit_input_from_request(
+		{"text": "live request", "mode": "act"}
+	)
+
+	# 2. A poll from a DIFFERENT (older) session is told it
+	# has been superseded and consumes NOTHING.
+	var stale = store.consume_input_snapshot("sess-old")
+	assert(stale["success"] == true)
+	assert(stale["superseded"] == true)
+	assert(stale["pending"] == false)
+	assert(stale["text"] == "")
+	assert(store.pending_requests.size() == 1)
+
+	# 3. The active session's poll consumes normally.
+	var active = store.consume_input_snapshot("sess-a")
+	assert(active["superseded"] == false)
+	assert(active["pending"] == true)
+	assert(active["text"] == "live request")
+
+	# 4. Events stamped with a foreign session id are
+	# dropped: a superseded process can never paint the
+	# active session's chat, timeline, or metrics.
+	var calls_before: int = store.model_call_count
+	store.apply_event(
+		{
+			"event": "model_response",
+			"session_id": "sess-zzz",
+			"turn": 9,
+			"step": 9,
+			"model": "stale",
+			"duration_ms": 1.0,
+		}
+	)
+	assert(store.model_call_count == calls_before)
+
+	store.apply_event(
+		{
+			"event": "model_response",
+			"session_id": "sess-a",
+			"turn": 1,
+			"step": 1,
+			"model": "live",
+			"duration_ms": 1.0,
+		}
+	)
+	assert(store.model_call_count == calls_before + 1)
+
+	# 5. The STARTING handover freezes input for the
+	# recorded (dying) session: queued work cannot be
+	# consumed by the old process while the fresh session
+	# spawns.
+	store.mark_session_starting()
+	store.submit_input_from_request(
+		{"text": "typed during handover", "mode": "act"}
+	)
+
+	var frozen = store.consume_input_snapshot("sess-a")
+	assert(frozen["pending"] == false)
+	assert(frozen["text"] == "")
+	assert(store.pending_requests.size() == 1)
+
+	# An unknown session id during the handover is the
+	# INCOMING fresh process (its session_started has not
+	# landed yet): it must NOT be told it is superseded.
+	var incoming = store.consume_input_snapshot("sess-b")
+	assert(incoming["superseded"] == false)
+	assert(incoming["pending"] == false)
+
+	# 6. The fresh session's session_started resets every
+	# session-scoped state, ends the freeze, and wipes
+	# anything still queued for the dead session; the old
+	# session id becomes stale for polls.
+	store.apply_event(
+		{
+			"event": "session_started",
+			"session_id": "sess-b",
+		}
+	)
+	assert(store.session_starting == false)
+	assert(store.session_id == "sess-b")
+	assert(store.chat_turns.is_empty())
+	assert(store.turn_number == 0)
+	assert(store.events.is_empty())
+	assert(store.pending_requests.is_empty())
+
+	var fresh = store.consume_input_snapshot("sess-b")
+	assert(fresh["superseded"] == false)
+	assert(fresh["pending"] == false)
+
+	var old_after = store.consume_input_snapshot("sess-a")
+	assert(old_after["superseded"] == true)
+
+	print("session isolation cases passed")
+
+
 func _init() -> void:
 
 	store = AIAgentStateStoreScript.new()
@@ -325,6 +438,8 @@ func _init() -> void:
 	_run_bounds_and_tolerance_cases()
 
 	_run_control_channel_cases()
+
+	_run_session_isolation_cases()
 
 	_run_router_cases()
 

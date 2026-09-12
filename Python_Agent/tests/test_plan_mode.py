@@ -222,3 +222,84 @@ def test_plan_mode_violation_detection(agent_module):
     assert is_mutation_action("find_nodes") is False
     assert is_mutation_action("get_scene_tree") is False
     assert is_mutation_action("final_answer") is False
+
+
+def test_fetch_passes_session_id_and_parses_superseded(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "success": True,
+                    "pending": False,
+                    "superseded": True,
+                    "text": "",
+                    "mode": "",
+                    "selected_model": "",
+                    "selected_provider": "",
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        bridge_input_module.urllib.request,
+        "urlopen",
+        fake_urlopen,
+    )
+
+    result = fetch_pending_input(
+        bridge_url="http://127.0.0.1:9999",
+        session_id="abc123",
+    )
+
+    assert captured["url"] == (
+        "http://127.0.0.1:9999/agent_input?session_id=abc123"
+    )
+    assert result["superseded"] is True
+    assert result["text"] == ""
+
+
+def test_fetch_unreachable_reports_not_superseded(monkeypatch):
+    _fake_urlopen(monkeypatch, {}, fail=True)
+
+    result = fetch_pending_input(
+        bridge_url="http://127.0.0.1:9999",
+        session_id="abc123",
+    )
+
+    assert result["reachable"] is False
+    assert result["superseded"] is False
+
+
+def test_read_request_raises_session_superseded(monkeypatch):
+    superseded_payload = {
+        "success": True,
+        "pending": False,
+        "superseded": True,
+        "text": "",
+        "mode": "",
+        "selected_model": "",
+        "selected_provider": "",
+    }
+    _fake_urlopen(monkeypatch, superseded_payload)
+
+    import pytest
+
+    from agent.bridge_input import SessionSuperseded
+
+    with pytest.raises(SessionSuperseded):
+        bridge_input_module.read_request(
+            bridge_url="http://127.0.0.1:9999",
+            sleep=lambda seconds: None,
+            session_id="abc123",
+        )

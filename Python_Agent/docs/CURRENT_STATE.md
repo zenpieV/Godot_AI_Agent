@@ -2052,3 +2052,32 @@ Verified: 385 Python tests, 22/22 harnesses, 8/8 curl route cases on
 an isolated editor instance, Rule 12 live Gemini smoke, and a full
 3-turn bridge-mode agent run (create -> move into folder -> delete)
 with a 4/4 verified mutation ledger.
+
+# Session isolation - fresh context on every session start (2026-09-12)
+
+Every session start (START SESSION, New Session, manual spawn) is now
+AUTHORITATIVE and starts with zero context overlap:
+
+- Agent polls identify their session (`GET /agent_input?session_id=`);
+  a poll from a non-active session gets `superseded: true` and the
+  agent raises `SessionSuperseded` and terminates itself
+  (`termination=superseded_by_new_session`). Stale processes from
+  editor restarts, closed consoles, or interrupted exits can never
+  serve a new session with old context or old turn numbers.
+- All UI events carry the emitting session id; the state store drops
+  events from any other session.
+- `mark_session_starting()` clears the pending-request FIFO; during
+  the STARTING handover no poller is served input (the dying process
+  cannot start work; the incoming fresh process is served "not ready",
+  never "superseded").
+- New Session spawns the fresh process immediately (no `/exit`
+  handoff; `respawn_pending` removed). `session_started` resets chat
+  turns, turn numbers, metrics, events, and the queue; the mutation
+  ledger remains a project-level audit trail by design.
+- The agent's FIRST turn now mirrors `begin_next_turn`'s guards
+  (`/exit`, empty, EOF, superseded) so a fresh session can never hold
+  a conversational turn about a stale `/exit`.
+
+Verified: 389 Python tests, 22/22 harnesses (new session-isolation
+cases), live two-agent supersede + numbering reset + stale-`/exit`
+wipe on an isolated editor instance.

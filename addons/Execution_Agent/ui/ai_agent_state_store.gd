@@ -149,8 +149,6 @@ var bridge_port: int = 8081
 var context_limit: int = 0
 var context_used_tokens: int = 0
 
-# New Session respawn flow (see the panel).
-var respawn_pending: bool = false
 	# Approval gate: one pending request and its decision
 	# (-1 none, 0 denied, 1 approved).
 var approval_id: String = ""
@@ -234,6 +232,27 @@ func apply_event(
 	var event_type := str(
 		event.get("event", "event")
 	)
+
+	# Events from a superseded (older) agent process must
+	# never leak into the active session's chat, timeline,
+	# or metrics. The reporter stamps every event with the
+	# emitting process's session id; anything arriving for
+	# a session other than the active one is dropped. Only
+	# session_started passes through unfiltered: it is what
+	# establishes the active session (and resets state).
+
+	var event_session := str(
+		event.get("session_id", "")
+	)
+
+	if (
+		event_type != "session_started"
+		and event_session != ""
+		and session_id != ""
+		and event_session != session_id
+	):
+
+		return
 
 	match event_type:
 
@@ -589,6 +608,16 @@ func mark_session_starting() -> void:
 
 	session_starting_ms = Time.get_ticks_msec()
 
+	# Starting a session means starting FRESH: anything
+	# still queued for the previous session (a stale
+	# "/exit", an unsent request) must never reach the
+	# new agent process. The session_started event resets
+	# the rest of the state when the new process announces
+	# itself; until then the old session's history stays
+	# visible only if the spawn fails.
+
+	pending_requests.clear()
+
 	status_changed.emit()
 
 
@@ -716,11 +745,56 @@ func submit_input_from_request(
 	}
 
 
-func consume_input_snapshot() -> Dictionary:
+func consume_input_snapshot(
+	requested_session_id: String = ""
+) -> Dictionary:
 
 	# GET /agent_input: consume-on-read of the pending
 	# request, plus the current model selection. Doubles
 	# as the agent-alive heartbeat.
+	#
+	# A poll that identifies a DIFFERENT session than the
+	# active one is stale ONLY when no session is starting:
+	# it comes from an older agent process that must exit
+	# instead of racing the live session for requests.
+	# While session_starting is true, an unknown session id
+	# is most likely the INCOMING fresh process (announcing
+	# itself takes a moment) - serve it nothing, but do not
+	# tell it to die.
+
+	if (
+		not session_starting
+		and requested_session_id != ""
+		and session_id != ""
+		and requested_session_id != session_id
+	):
+
+		return {
+			"success": true,
+			"pending": false,
+			"superseded": true,
+			"text": "",
+			"mode": "",
+			"selected_provider": "",
+			"selected_model": "",
+		}
+
+	# During the STARTING handover nobody is served input:
+	# the recorded session id belongs to the dying process
+	# (frozen so it cannot start new work), and the fresh
+	# process re-polls until its own session_started lands.
+
+	if session_starting:
+
+		return {
+			"success": true,
+			"pending": false,
+			"superseded": false,
+			"text": "",
+			"mode": "",
+			"selected_provider": "",
+			"selected_model": "",
+		}
 
 	last_input_poll_ms = Time.get_ticks_msec()
 
@@ -732,6 +806,7 @@ func consume_input_snapshot() -> Dictionary:
 	var snapshot := {
 		"success": true,
 		"pending": has_pending,
+		"superseded": false,
 		"text": str(front.get("text", "")),
 		"mode": str(front.get("mode", "act")),
 		"selected_provider": selected_provider,

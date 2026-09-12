@@ -137,3 +137,27 @@ def test_bridge_url_constructor_override(monkeypatch):
     assert captured[0]["url"] == (
         "http://127.0.0.1:8082/agent_event"
     )
+
+
+def test_report_envelope_carries_session_id(monkeypatch):
+    """Every event is stamped with the emitting process's
+    session id so the editor-side store can discard events
+    from a superseded (older) agent process."""
+    captured = _capture_reporter(monkeypatch)
+    reporter = UiReporter(
+        enabled=True,
+        bridge_url="http://127.0.0.1:9999",
+    )
+    reporter.session_id = "abc123"
+
+    reporter.report("turn_started", turn=1)
+
+    payload = captured[0]["data"]
+    assert payload["session_id"] == "abc123"
+    assert payload["event"] == "turn_started"
+
+    reporter.session_id = ""
+    captured.clear()
+    reporter.report("turn_started", turn=1)
+
+    assert captured[0]["data"]["session_id"] == ""

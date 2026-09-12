@@ -162,18 +162,6 @@ func _process(_delta: float) -> void:
 
 	_animate_thinking()
 
-	# New Session respawn: once the ended session's
-	# session_ended event has been observed, spawn the
-	# fresh agent process via the plugin callback.
-	if (
-		store != null
-		and store.respawn_pending
-		and store.status == "session_ended"
-	):
-		store.respawn_pending = false
-		_start_session_callback.call()
-		store.mark_session_starting()
-
 	# The heartbeat goes stale over TIME, so the dot must
 	# refresh continuously, not just on store signals.
 
@@ -207,24 +195,28 @@ func _on_new_session_pressed() -> void:
 	if store == null or not store.is_session_running():
 		return
 
-	if store.respawn_pending:
+	if store.session_starting:
 		return
 
-	# Mark the intent, then queue /exit like any request.
-	# The agent's input poll consumes it, the session
-	# terminates cleanly (session_ended event), and the
-	# panel's _process spawns the fresh process via the
-	# plugin callback.
+	if not _start_session_callback.is_valid():
+		return
 
-	store.respawn_pending = true
+	# A new session is authoritative IMMEDIATELY: spawn the
+	# fresh process right away instead of waiting for the
+	# old one to end. When the fresh process announces
+	# itself (session_started), the store resets every
+	# session-scoped state (chat, turn numbers, metrics)
+	# and any older agent process still polling the bridge
+	# is told it has been superseded and exits itself. No
+	# /exit handoff, so the fresh session can never inherit
+	# queued state from the old one.
 
-	_post_bridge_json(
-		"/agent_input",
-		{"text": "/exit", "mode": "act"},
-		func(response: Dictionary) -> void:
-			if not response.get("success", false):
-				store.respawn_pending = false
-	)
+	store.mark_session_starting()
+
+	var started: bool = _start_session_callback.call()
+
+	if not started:
+		store.mark_session_start_failed()
 
 func _on_status_button_pressed() -> void:
 
@@ -525,10 +517,11 @@ func _build_header(
 	_new_session_button.text = "New Session"
 
 	_new_session_button.tooltip_text = (
-		"Ends the current agent process and starts a "
-		+ "fresh one with an empty conversation. Use "
-		+ "when the context meter runs high or the "
-		+ "session is stuck."
+		"Starts a fresh agent process with an empty "
+		+ "conversation right away; the previous "
+		+ "process exits itself. Use when the "
+		+ "context meter runs high or the session "
+		+ "is stuck."
 	)
 
 	_new_session_button.pressed.connect(

@@ -56,6 +56,14 @@ class UiReporter:
             else DEFAULT_TIMEOUT_SECONDS
         )
 
+        # Set by godot_agent once the session id exists.
+        # Every event carries it so the Godot-side store
+        # can discard events from a superseded (older)
+        # agent process instead of letting them leak into
+        # the active session's chat and timeline.
+
+        self.session_id = ""
+
     def report(self, event_type, **fields):
         """
         Send one UI event. Returns True when the event
@@ -69,6 +77,7 @@ class UiReporter:
         payload = {
             "event": str(event_type),
             "ts": round(time.time(), 3),
+            "session_id": str(self.session_id),
         }
 
         payload.update(fields)

@@ -53,6 +53,42 @@ func route_request(
 	body_text: String
 ) -> Dictionary:
 
+	# Query strings are stripped from the path so route
+	# matching stays exact; the pairs are exposed to the
+	# routes that need them (GET /agent_input carries the
+	# polling agent's session id for supersede detection).
+
+	var query := {}
+
+	if path.contains("?"):
+
+		var path_parts := PackedStringArray(
+			path.split("?", true, 1)
+		)
+
+		path = path_parts[0]
+
+		if path_parts.size() > 1:
+
+			for pair in path_parts[1].split(
+				"&",
+				false
+			):
+
+				var key_value := PackedStringArray(
+					pair.split("=", true, 1)
+				)
+
+				if key_value.size() > 0:
+
+					query[
+						key_value[0].uri_decode()
+					] = (
+						key_value[1].uri_decode()
+						if key_value.size() > 1
+						else ""
+					)
+
 	# ======================================
 	# Route: /ping
 	# ======================================
@@ -926,7 +962,9 @@ func route_request(
 		and path == "/agent_input"
 	):
 
-		return state_store.consume_input_snapshot()
+		return state_store.consume_input_snapshot(
+			str(query.get("session_id", ""))
+		)
 
 	if (
 		method == "POST"

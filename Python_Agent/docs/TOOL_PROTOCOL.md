@@ -4020,13 +4020,37 @@ plugin queues the newest request in a single slot (a newer
 submission displaces an older unconsumed one and the response
 reports `"queued": true`). GET /agent_input is CONSUME-ON-READ:
 the agent — running with `AGENT_INPUT_MODE=bridge` — polls it
-every ~0.4 s and receives `{"pending", "text",
-"selected_provider", "selected_model"}`. The GET doubles as the
-agent-alive heartbeat the panel's connection dot renders (green
-while polling or busy, red when the idle heartbeat goes stale,
-gray when the agent runs in classic stdin mode and never polls).
+every ~0.4 s as
+`GET /agent_input?session_id=<its session id>` and receives
+`{"pending", "text", "selected_provider", "selected_model",
+"superseded"}`. The GET doubles as the agent-alive heartbeat the
+panel's connection dot renders (green while polling or busy, red
+when the idle heartbeat goes stale, gray when the agent runs in
+classic stdin mode and never polls).
 Model selections from the panel's dropdown travel the same
 channel as `model_selected` events and apply to the NEXT turn.
+
+### Session supersede (one live session, ever)
+
+Every poll identifies its session. When the bridge considers a
+DIFFERENT session active, it answers `superseded: true` and the
+polling process raises `SessionSuperseded` in Python and
+terminates itself (telemetry `termination=superseded_by_new_
+session`) instead of racing the live session for requests. This
+makes every session start authoritative — START SESSION, New
+Session, or a manual spawn — so no stale process can ever serve
+a new session with old context or old turn numbers. Two extra
+guards close the handover window: `mark_session_starting()`
+clears the pending-request FIFO (a stale `/exit` or unsent
+request can never leak into the new session), and while
+`session_starting` is true NO poller is served input (the old
+process cannot start new work; the fresh process re-polls until
+its own `session_started` lands, which resets chat, turn
+numbers, metrics, and events). Events carry the emitting
+process's `session_id`; the store drops any event whose session
+does not match the active one. The FIRST turn also mirrors the
+`/exit`/empty guards of `begin_next_turn`, so a session can
+never hold a conversational "turn" about a stale `/exit`.
 
 ## Model selector (per-turn override)
 
