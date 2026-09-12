@@ -2081,3 +2081,20 @@ AUTHORITATIVE and starts with zero context overlap:
 Verified: 389 Python tests, 22/22 harnesses (new session-isolation
 cases), live two-agent supersede + numbering reset + stale-`/exit`
 wipe on an isolated editor instance.
+
+# Legacy poller neutralization + silent heartbeats (2026-09-12)
+
+Follow-up to session isolation: a LEGACY agent process (running
+pre-session-id code) cannot be told "superseded" - it ignores
+unknown poll fields. While an identified session is active, the
+store now answers its bare `GET /agent_input` with a literal
+`"/exit"` request, which every historical agent version treats as
+the termination command: the stray process reaps itself. Its
+unidentified events (including its session_ended) are dropped by
+the store's event filter, so it can neither paint the active
+session's UI nor flip its status button to START SESSION. With no
+active session, bare polls are served normally.
+
+Heartbeat GETs (/agent_input, /agent_approval) are no longer
+printed to the editor output (~2.5 lines/sec/agent of noise); all
+other requests still log.

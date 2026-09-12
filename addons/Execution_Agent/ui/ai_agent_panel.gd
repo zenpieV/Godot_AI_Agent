@@ -1404,6 +1404,11 @@ func _on_model_selected(index: int) -> void:
 		"/agent_event",
 		{
 			"event": "model_selected",
+			# Stamped with the active session so the
+			# store's legacy-event filter (events with
+			# no session id are dropped while a session
+			# is active) never swallows panel traffic.
+			"session_id": store.session_id,
 			"provider": str(entry.get("provider", "")),
 			"model": str(entry.get("model", "")),
 		},

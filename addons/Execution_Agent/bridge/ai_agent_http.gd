@@ -90,12 +90,31 @@ func handle_connection(
 
 	var request: Dictionary = read_result["request"]
 
-	print(
-		"AI Agent request: "
-		+ str(request["method"])
-		+ " "
-		+ str(request["path"])
-	)
+	# Heartbeat polls are deliberately silent: every
+	# bridge-mode agent GETs /agent_input every ~0.4 s
+	# (and the approval gate GETs /agent_approval while
+	# waiting), which would otherwise flood the editor
+	# output for the entire session. Everything else is
+	# logged as before.
+
+	if not (
+		str(request["method"]) == "GET"
+		and (
+			str(request["path"]).begins_with(
+				"/agent_input"
+			)
+			or str(request["path"]).begins_with(
+				"/agent_approval"
+			)
+		)
+	):
+
+		print(
+			"AI Agent request: "
+			+ str(request["method"])
+			+ " "
+			+ str(request["path"])
+		)
 
 	var response_data: Dictionary = (
 		router.route_request(

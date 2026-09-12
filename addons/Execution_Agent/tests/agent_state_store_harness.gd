@@ -13,6 +13,23 @@ var store
 
 
 func _apply(event: Dictionary) -> void:
+
+	# The real reporter stamps every event with the
+	# emitting process's session id; mirror that here so
+	# simulated events land in the active session.
+	# session_started is exempt (it always carries its own
+	# fresh id, or none for an anonymous reset), and cases
+	# that deliberately test LEGACY (unidentified) events
+	# call store.apply_event directly with no session id.
+
+	if (
+		not event.has("session_id")
+		and str(event.get("event", "")) != "session_started"
+		and store.session_id != ""
+	):
+
+		event["session_id"] = store.session_id
+
 	store.apply_event(event)
 
 
@@ -425,6 +442,53 @@ func _run_session_isolation_cases() -> void:
 
 	var old_after = store.consume_input_snapshot("sess-a")
 	assert(old_after["superseded"] == true)
+
+	# 7. A LEGACY poll (no session id) while a session is
+	# active is handed a literal "/exit" so the old-code
+	# process terminates itself, and the live queue is
+	# untouched by the poisoned poll.
+	store.submit_input_from_request(
+		{"text": "real request", "mode": "act"}
+	)
+
+	var legacy = store.consume_input_snapshot("")
+	assert(legacy["pending"] == true)
+	assert(legacy["text"] == "/exit")
+	assert(store.pending_requests.size() == 1)
+
+	# 8. Unidentified (legacy) events are dropped while a
+	# session is active - most importantly a legacy
+	# session_ended must NOT flip the active session's
+	# status to session_ended (START SESSION button).
+	var calls_before_legacy: int = store.model_call_count
+	store.apply_event(
+		{
+			"event": "model_response",
+			"turn": 3,
+			"step": 1,
+			"model": "legacy",
+		}
+	)
+	assert(store.model_call_count == calls_before_legacy)
+
+	store.apply_event({"event": "session_ended"})
+	assert(store.status != "session_ended")
+
+	# The live session still consumes normally.
+	var live = store.consume_input_snapshot("sess-b")
+	assert(live["pending"] == true)
+	assert(live["text"] == "real request")
+
+	# 9. With NO active session a bare poll is served
+	# normally (a legacy agent may be the only agent).
+	store.apply_event({"event": "session_started"})
+	assert(store.session_id == "")
+	store.submit_input_from_request(
+		{"text": "legacy-only", "mode": "act"}
+	)
+	var legacy_only = store.consume_input_snapshot("")
+	assert(legacy_only["pending"] == true)
+	assert(legacy_only["text"] == "legacy-only")
 
 	print("session isolation cases passed")
 

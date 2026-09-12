@@ -245,9 +245,17 @@ func apply_event(
 		event.get("session_id", "")
 	)
 
+	# LEGACY processes (predating session identification)
+	# send events with NO session id. While an identified
+	# session is active, those events come from a stale
+	# process - straggler output, or the session_ended of a
+	# reaped legacy poller - and would otherwise flip the
+	# active session's status button to START SESSION. The
+	# panel's own model_selected POST carries the active
+	# session id, so legitimate UI traffic is unaffected.
+
 	if (
 		event_type != "session_started"
-		and event_session != ""
 		and session_id != ""
 		and event_session != session_id
 	):
@@ -792,6 +800,34 @@ func consume_input_snapshot(
 			"superseded": false,
 			"text": "",
 			"mode": "",
+			"selected_provider": "",
+			"selected_model": "",
+		}
+
+	# A poll WITHOUT a session id comes from a LEGACY agent
+	# process (predating session identification) - it cannot
+	# understand "superseded", so the poll response alone
+	# can never make it exit. While an identified session is
+	# active such a process must never steal the live
+	# session's requests, so it is handed a literal "/exit"
+	# request instead: the legacy process consumes it,
+	# recognizes the termination command, and exits cleanly.
+	# Its unidentified session_ended is dropped by the event
+	# filter, so the active session's panel is unaffected.
+	# With no active session a bare poll is served normally
+	# (a legacy agent may be the only agent running).
+
+	if (
+		session_id != ""
+		and requested_session_id == ""
+	):
+
+		return {
+			"success": true,
+			"pending": true,
+			"superseded": false,
+			"text": "/exit",
+			"mode": "act",
 			"selected_provider": "",
 			"selected_model": "",
 		}

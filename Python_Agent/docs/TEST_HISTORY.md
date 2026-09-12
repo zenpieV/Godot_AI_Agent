@@ -3228,3 +3228,80 @@ Before any port-based livecheck, verify the listener identity
 
 Implemented and validated; every session start is authoritative
 and starts with zero context overlap.
+
+# Legacy Agent Pollers: Stuck THINKING -> START SESSION Flip (2026-09-12, zenpieV report)
+
+## Scope
+
+During a long multi-step task the panel froze in THINKING around
+step 17, then the status button flipped to START SESSION, and the
+output dock flooded with alternating
+`GET /agent_input?session_id=b95e3ab1` / `GET /agent_input` lines.
+
+Diagnosis: TWO agent processes were polling the bridge. The bare
+(no session_id) polls came from a LEGACY agent process - started
+before the session-isolation update, still running the old Python
+code after the editor restart. The d8a587d supersede design only
+kills processes that IDENTIFY themselves, so the legacy poller
+slipped through every guard:
+
+- Bare polls were trusted: the legacy process could consume the
+  FIFO (it may have won the consume race for the task itself).
+- Legacy events carry NO session id, so the event filter passed
+  them: the panel displayed the legacy process's steps 1-17.
+- When the legacy process ended mid-task (its own console holds
+  the reason; most plausibly a model-call failure on the long
+  conversation), its UNIDENTIFIED session_ended event passed the
+  filter and flipped the ACTIVE session's status button to START
+  SESSION while the real session (b95e3ab1) was still alive and
+  idle-polling - the exact reported symptom.
+- The alternating poll flood itself: two idle agents polling
+  every ~0.4 s, each poll printed to the editor output.
+
+Fixes:
+
+1. Bare polls are POISONED while an identified session is active:
+   the store answers {"pending": true, "text": "/exit"} so the
+   legacy process consumes a termination command and exits itself
+   (all historical agent versions check TERMINATION_COMMAND on
+   consumption). Its session_ended is dropped by the filter, so
+   the active session is unaffected. With NO active session a
+   bare poll is served normally (a legacy agent may be the only
+   agent).
+2. The event filter now also drops events with an EMPTY session
+   id while a session is active (legacy stragglers, reaped
+   pollers' lifecycle events). The panel's model_selected POST
+   carries the active session id, so legitimate UI traffic is
+   unaffected.
+3. Heartbeat GETs (/agent_input, /agent_approval) are no longer
+   printed to the editor output - 2.5 lines/sec/agent of noise
+   gone; all other requests still log.
+
+## Tests
+
+Python 389 passed (no Python changes this round). Harnesses 22/22
+including new store cases: bare poll poisoned while a session is
+active (live queue untouched), legacy model_response and legacy
+session_ended dropped, live session still consumes normally, bare
+poll served normally with no active session. The store harness's
+_apply helper now mirrors the real reporter by stamping the
+active session id (session_started exempt).
+
+## Live validation (isolated editor instance, port 8084)
+
+- Bare poll with session f341772b active -> {"pending": true,
+  "text": "/exit"}.
+- Foreign session poll -> superseded: true.
+- Unidentified session_ended -> status stayed "ready", session
+  unchanged.
+- Identified session_ended -> status became "session_ended".
+- Six seconds of idle polling produced ZERO new "AI Agent
+  request" log lines (was ~15).
+
+## Status
+
+Implemented and validated: a legacy process can no longer steal
+the session, paint its output into the panel, flip the status
+button, or flood the output dock. Note: a legacy agent's own
+console window still shows why IT ended; the active session is
+unaffected.
