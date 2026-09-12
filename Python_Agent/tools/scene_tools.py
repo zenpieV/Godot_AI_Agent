@@ -3,6 +3,8 @@ import os
 import urllib.error
 import urllib.request
 
+from config.settings import BRIDGE_TIMEOUT_SECONDS
+
 
 # ==========================================
 # Godot editor bridge
@@ -10,7 +12,8 @@ import urllib.request
 # Overridable via GODOT_BRIDGE_URL so the Python
 # agent (and its UI event reporter) can target an
 # isolated editor instance during live validation
-# without code edits.
+# without code edits. The per-request timeout comes
+# from settings (GODOT_BRIDGE_TIMEOUT).
 
 GODOT_BRIDGE_URL = os.environ.get(
     "GODOT_BRIDGE_URL",
@@ -63,7 +66,7 @@ def _request_json(
 
         with urllib.request.urlopen(
             request,
-            timeout=5
+            timeout=BRIDGE_TIMEOUT_SECONDS
         ) as response:
 
             body = (

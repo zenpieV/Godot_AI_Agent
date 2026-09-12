@@ -79,6 +79,8 @@ var _model_option: OptionButton
 var _tokens_label: Label
 
 var _approval_label: Label
+var _new_session_button: Button
+var _context_label: Label
 
 var _tabs: TabContainer
 
@@ -158,10 +160,24 @@ func _process(_delta: float) -> void:
 
 	_animate_thinking()
 
+	# New Session respawn: once the ended session's
+	# session_ended event has been observed, spawn the
+	# fresh agent process via the plugin callback.
+	if (
+		store != null
+		and store.respawn_pending
+		and store.status == "session_ended"
+	):
+		store.respawn_pending = false
+		_start_session_callback.call()
+		store.mark_session_starting()
+
 	# The heartbeat goes stale over TIME, so the dot must
 	# refresh continuously, not just on store signals.
 
 	_update_connection_dot()
+
+	_update_context_label()
 
 	# STARTING... must not wedge: if the agent process
 	# never announces itself, allow another attempt.
@@ -176,6 +192,29 @@ func _process(_delta: float) -> void:
 
 		_refresh_header()
 
+
+func _on_new_session_pressed() -> void:
+	if store == null or not store.is_session_running():
+		return
+
+	if store.respawn_pending:
+		return
+
+	# Mark the intent, then queue /exit like any request.
+	# The agent's input poll consumes it, the session
+	# terminates cleanly (session_ended event), and the
+	# panel's _process spawns the fresh process via the
+	# plugin callback.
+
+	store.respawn_pending = true
+
+	_post_bridge_json(
+		"/agent_input",
+		{"text": "/exit", "mode": "act"},
+		func(response: Dictionary) -> void:
+			if not response.get("success", false):
+				store.respawn_pending = false
+	)
 
 func _on_status_button_pressed() -> void:
 
@@ -448,6 +487,43 @@ func _build_header(
 	)
 
 	header.add_child(_approval_label)
+
+	# New Session: ends the running agent process via
+	# /exit (queued like any request) and spawns a fresh
+	# one as soon as the session_ended event lands. The
+	# fresh process starts with an empty conversation.
+
+	_new_session_button = Button.new()
+
+	_new_session_button.text = "New Session"
+
+	_new_session_button.tooltip_text = (
+		"Ends the current agent process and starts a "
+		+ "fresh one with an empty conversation. Use "
+		+ "when the context meter runs high or the "
+		+ "session is stuck."
+	)
+
+	_new_session_button.pressed.connect(
+		_on_new_session_pressed
+	)
+
+	header.add_child(_new_session_button)
+
+	# Context meter: approximate conversation size (the
+	# last prompt includes the whole conversation) against
+	# the provider's configured limit.
+
+	_context_label = Label.new()
+
+	_context_label.text = ""
+
+	_context_label.tooltip_text = (
+		"Approximate conversation size (last prompt "
+		+ "tokens) against the configured limit."
+	)
+
+	header.add_child(_context_label)
 
 
 func _make_tree(
@@ -778,6 +854,43 @@ func _refresh_header() -> void:
 		_chat_send_button.disabled = true
 
 	_update_elapsed()
+
+
+func _update_context_label() -> void:
+
+	if store == null or _context_label == null:
+		return
+
+	if store.context_limit <= 0 or store.model_call_count == 0:
+		_context_label.text = ""
+		return
+
+	var fraction := float(store.context_used_tokens) / float(
+		store.context_limit
+	)
+
+	_context_label.text = "ctx %s/%s (%d%%)" % [
+		_thousands(store.context_used_tokens),
+		_thousands(store.context_limit),
+		int(fraction * 100.0),
+	]
+
+	var meter_color := _color(
+		"success_color", Color(0.45, 0.8, 0.45)
+	)
+
+	if fraction > 0.8:
+		meter_color = _color(
+			"error_color", Color(0.9, 0.3, 0.3)
+		)
+	elif fraction > 0.5:
+		meter_color = _color(
+			"warning_color", Color(0.95, 0.75, 0.2)
+		)
+
+	_context_label.add_theme_color_override(
+		"font_color", meter_color
+	)
 
 
 func _update_connection_dot() -> void:

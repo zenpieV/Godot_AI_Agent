@@ -123,9 +123,11 @@ var metrics: Array = []
 # GET /agent_input, which is also the agent-alive heartbeat
 # the panel's connection dot renders.
 
-var pending_request: String = ""
+# FIFO queue (max 5): requests submitted while the
+# agent is busy are served in order instead of the
+# newest displacing everything else.
 
-var pending_mode: String = ""
+var pending_requests: Array = []
 
 var selected_provider: String = ""
 
@@ -140,6 +142,15 @@ var last_input_poll_ms: int = 0
 # plugin so panel and server can never drift apart.
 
 var bridge_port: int = 8081
+
+# Context meter: approximate conversation size (the last
+# model call's prompt tokens include the whole
+# conversation) against the provider's configured limit.
+var context_limit: int = 0
+var context_used_tokens: int = 0
+
+# New Session respawn flow (see the panel).
+var respawn_pending: bool = false
 
 # Start Session flow: the panel's status button spawns the
 # agent process; between the click and the agent's
@@ -237,6 +248,10 @@ func apply_event(
 			)
 			model_label = str(
 				event.get("model", "")
+			)
+
+			context_limit = int(
+				event.get("context_limit", 0)
 			)
 			if event.has("available_models") and (
 				event["available_models"] is Array
@@ -568,7 +583,7 @@ func snapshot() -> Dictionary:
 		"turn": turn_number,
 		"step": step_number,
 		"busy": is_busy(),
-		"pending_request": pending_request,
+		"pending_count": pending_requests.size(),
 		"selected_provider": selected_provider,
 		"selected_model": selected_model,
 		"available_models": available_models.duplicate(),
@@ -633,21 +648,28 @@ func submit_input_from_request(
 			)
 		}
 
-	var was_queued: bool = (
-		not pending_request.is_empty()
-	)
+	var mode := str(data.get("mode", "act"))
+	if mode != "plan":
+		mode = "act"
 
-	# Single-slot queue: a newer request replaces an
-	# older still-unconsumed one (the newest intent
-	# wins); "queued" tells the panel whether it
-	# displaced anything.
+	var was_queued: bool = pending_requests.size() >= 1
 
-	pending_request = text.substr(0, 2000)
+	# FIFO: append at the back; the agent consumes the
+	# oldest first. Beyond 5 pending requests the
+	# submission is refused rather than queued.
+	if pending_requests.size() >= 5:
+		return {
+			"success": false,
+			"error": (
+				"agent_input queue is full (5 pending "
+				+ "requests); the agent is busy."
+			)
+		}
 
-	pending_mode = str(data.get("mode", "act"))
-
-	if pending_mode != "plan":
-		pending_mode = "act"
+	pending_requests.append({
+		"text": text.substr(0, 2000),
+		"mode": mode,
+	})
 
 	return {
 		"success": true,
@@ -664,18 +686,19 @@ func consume_input_snapshot() -> Dictionary:
 
 	last_input_poll_ms = Time.get_ticks_msec()
 
+	var has_pending: bool = not pending_requests.is_empty()
+	var front: Dictionary = (
+		pending_requests.pop_front()
+	) if has_pending else {}
+
 	var snapshot := {
 		"success": true,
-		"pending": not pending_request.is_empty(),
-		"text": pending_request,
-		"mode": pending_mode,
+		"pending": has_pending,
+		"text": str(front.get("text", "")),
+		"mode": str(front.get("mode", "act")),
 		"selected_provider": selected_provider,
 		"selected_model": selected_model,
 	}
-
-	pending_request = ""
-
-	pending_mode = "act"
 
 	return snapshot
 
@@ -761,6 +784,8 @@ func _reset() -> void:
 
 	events.clear()
 
+	pending_requests.clear()
+
 	chat_turns.clear()
 
 	metrics.clear()
@@ -808,6 +833,9 @@ func _apply_usage(
 ) -> void:
 
 	model_call_count += 1
+
+	if event.has("prompt_tokens") and event["prompt_tokens"] != null:
+		context_used_tokens = int(event["prompt_tokens"])
 
 	var prompt_tokens: int = -1
 

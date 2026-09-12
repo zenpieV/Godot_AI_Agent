@@ -1014,6 +1014,24 @@ def normalize_agent_response(
 # 3. Unified model interface
 # ==========================================
 
+
+def _is_transient_provider_error(error) -> bool:
+    """Best-effort classification of retryable provider
+    failures: HTTP 429 (rate limit) and 5xx statuses
+    surfaced through provider error messages. Deterministic,
+    bounded (one retry), and never retries auth or schema
+    errors."""
+
+    message = str(error)
+
+    for token in ("429", "503", "502", "504", "overloaded"):
+
+        if token in message.lower():
+            return True
+
+    return False
+
+
 def ask_model(
     conversation,
     observability=None,
@@ -1058,33 +1076,62 @@ def ask_model(
     call_id = str(uuid.uuid4())[:8]
     started_at = time.time()
     started_monotonic = time.monotonic()
-    try:
-        response = provider(
-            conversation=conversation,
-            schema=schema,
-        )
-        result = (
-            response
-            if isinstance(response, ProviderResult)
-            else ProviderResult(text=response)
-        )
-    except Exception as error:
-        if observability is not None:
-            observability.record_model_call(
-                call_id=call_id,
-                turn_number=turn_number,
-                step_number=step_number,
-                provider=active_provider,
-                model=model,
-                duration_ms=(time.monotonic() - started_monotonic) * 1000,
-                usage=TokenUsage(),
-                success=False,
-                started_at=started_at,
-                error=safe_error_message(error),
+    # Uniform transient-error retry: provider adapters
+    # have heterogeneous internal retry policies (the
+    # Groq SDK and the Gemini adapter retry 429/503
+    # themselves; Z.ai and OpenRouter do not), so the
+    # loop applies one bounded retry here for transient
+    # failures regardless of provider. A retry that
+    # itself fails records one failed model call and
+    # propagates, as before.
+
+    last_error = None
+
+    for attempt in range(2):
+
+        try:
+            response = provider(
+                conversation=conversation,
+                schema=schema,
             )
-        raise
+            result = (
+                response
+                if isinstance(response, ProviderResult)
+                else ProviderResult(text=response)
+            )
+            break
+        except Exception as error:
+
+            last_error = error
+
+            if attempt == 0 and _is_transient_provider_error(
+                error
+            ):
+                logger.warning(
+                    "Transient provider error (attempt 1), "
+                    + "retrying: "
+                    + safe_error_message(error)
+                )
+                time.sleep(2.0)
+                continue
+
+            if observability is not None:
+                observability.record_model_call(
+                    call_id=call_id,
+                    turn_number=turn_number,
+                    step_number=step_number,
+                    provider=active_provider,
+                    model=model,
+                    duration_ms=(time.monotonic() - started_monotonic) * 1000,
+                    usage=TokenUsage(),
+                    success=False,
+                    started_at=started_at,
+                    error=safe_error_message(error),
+                )
+            raise
 
     duration_ms = (time.monotonic() - started_monotonic) * 1000
+
     if observability is not None:
         observability.record_model_call(
             call_id=call_id,
@@ -1775,6 +1822,7 @@ UI_REPORTER.report(
     session_id=session_id,
     model=UI_MODEL_LABEL,
     available_models=UI_AVAILABLE_MODELS,
+    context_limit=_ui_settings.CONTEXT_LIMIT_TOKENS,
 )
 
 

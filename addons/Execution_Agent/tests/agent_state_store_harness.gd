@@ -251,9 +251,8 @@ func _run_control_channel_cases() -> void:
 	assert(second["text"] == "")
 	assert(store.is_agent_connected() == true)
 
-	# 3. A newer submission replaces an older unconsumed
-	# one; "queued" reports the displacement. Plan mode
-	# rides along.
+	# 3. FIFO: requests are served oldest-first, each
+	# carrying its own mode. Absent mode defaults to act.
 	store.submit_input_from_request(
 		{"text": "one", "mode": "act"}
 	)
@@ -261,14 +260,29 @@ func _run_control_channel_cases() -> void:
 		{"text": "two", "mode": "plan"}
 	)
 	assert(displaced["queued"] == true)
-	var latest = store.consume_input_snapshot()
-	assert(latest["text"] == "two")
-	assert(latest["mode"] == "plan")
-
-	# An absent mode defaults to act.
 	store.submit_input_from_request({"text": "three"})
-	var defaulted = store.consume_input_snapshot()
-	assert(defaulted["mode"] == "act")
+
+	var latest = store.consume_input_snapshot()
+	assert(latest["text"] == "one")
+	assert(latest["mode"] == "act")
+	var latest2 = store.consume_input_snapshot()
+	assert(latest2["text"] == "two")
+	assert(latest2["mode"] == "plan")
+	var latest3 = store.consume_input_snapshot()
+	assert(latest3["text"] == "three")
+	assert(latest3["mode"] == "act")
+
+	# 3b. A full queue (5) refuses further submissions.
+	for probe_index in range(5):
+		store.submit_input_from_request(
+			{"text": "q%d" % probe_index}
+		)
+	var full = store.submit_input_from_request(
+		{"text": "overflow"}
+	)
+	assert(full["success"] == false)
+	assert(full["error"].contains("queue is full"))
+	assert(store.pending_requests.size() == 5)
 
 	# 4. Model selection applies to the NEXT turn and
 	# survives until changed.

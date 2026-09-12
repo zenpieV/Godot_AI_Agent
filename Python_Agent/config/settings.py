@@ -34,6 +34,25 @@ MAX_BATCH_SIZE = 5
 
 MAX_STEPS = 30
 
+# Approximate context-window budget used by the UI's
+# context meter. The meter compares the last model call's
+# prompt tokens (which include the whole conversation)
+# against this limit. Override via environment variable.
+
+import os as _os_ctx
+
+CONTEXT_LIMIT_TOKENS = int(
+    _os_ctx.getenv("CONTEXT_LIMIT_TOKENS", "200000")
+)
+
+# Timeout for a single bridge request. Local responses
+# are fast, but heavy operations (project scans, refactors
+# over large projects) legitimately take seconds.
+
+BRIDGE_TIMEOUT_SECONDS = float(
+    _os_ctx.getenv("GODOT_BRIDGE_TIMEOUT", "15")
+)
+
 # ==========================================
 # Ollama configuration
 # ==========================================
