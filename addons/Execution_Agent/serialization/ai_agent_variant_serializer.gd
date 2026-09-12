@@ -254,13 +254,18 @@ func deserialize_property_value(
 
 	if value == null:
 
+		# Strict null handling: null is only a legal
+		# value for TYPE_NIL properties. Silently
+		# passing null into anything else bypasses
+		# every type check below.
+
 		if expected_type == TYPE_NIL:
 			return result
 
-		return {
-			"success": true,
-			"value": null
-		}
+		return _type_error(
+			"non-null",
+			value
+		)
 
 	match expected_type:
 
@@ -408,10 +413,28 @@ func deserialize_property_value(
 			result["value"] = value
 			return result
 
-	return {
-		"success": true,
-		"value": value
-	}
+		TYPE_OBJECT:
+
+			# Object-valued properties cannot be built
+			# from JSON: use assign_resource_to_property
+			# for Resource properties.
+
+			return _type_error(
+				"non-Object (use "
+				+ "assign_resource_to_property for "
+				+ "Resource properties)",
+				value
+			)
+
+	# Unknown/unsupported expected types are now
+	# structured failures instead of silent raw
+	# passthrough - a wrong-shaped payload must never
+	# "validate" successfully.
+
+	return _type_error(
+		"a supported type for this property",
+		value
+	)
 
 
 # ==========================================
@@ -434,12 +457,17 @@ func _deserialize_vector2(
 			value
 		)
 
+	var x := _strict_float(value["x"])
+
+	var y := _strict_float(value["y"])
+
+	if x == null or y == null:
+
+		return _type_error("Vector2", value)
+
 	return {
 		"success": true,
-		"value": Vector2(
-			float(value["x"]),
-			float(value["y"])
-		)
+		"value": Vector2(x, y)
 	}
 
 
@@ -458,12 +486,17 @@ func _deserialize_vector2i(
 			value
 		)
 
+	var x := _strict_int(value["x"])
+
+	var y := _strict_int(value["y"])
+
+	if x == null or y == null:
+
+		return _type_error("Vector2i", value)
+
 	return {
 		"success": true,
-		"value": Vector2i(
-			int(value["x"]),
-			int(value["y"])
-		)
+		"value": Vector2i(x, y)
 	}
 
 
@@ -483,13 +516,19 @@ func _deserialize_vector3(
 			value
 		)
 
+	var x := _strict_float(value["x"])
+
+	var y := _strict_float(value["y"])
+
+	var z := _strict_float(value["z"])
+
+	if x == null or y == null or z == null:
+
+		return _type_error("Vector3", value)
+
 	return {
 		"success": true,
-		"value": Vector3(
-			float(value["x"]),
-			float(value["y"]),
-			float(value["z"])
-		)
+		"value": Vector3(x, y, z)
 	}
 
 
@@ -509,13 +548,19 @@ func _deserialize_vector3i(
 			value
 		)
 
+	var x := _strict_int(value["x"])
+
+	var y := _strict_int(value["y"])
+
+	var z := _strict_int(value["z"])
+
+	if x == null or y == null or z == null:
+
+		return _type_error("Vector3i", value)
+
 	return {
 		"success": true,
-		"value": Vector3i(
-			int(value["x"]),
-			int(value["y"]),
-			int(value["z"])
-		)
+		"value": Vector3i(x, y, z)
 	}
 
 
@@ -540,22 +585,60 @@ func _deserialize_color(
 			value
 		)
 
+	var r := _strict_float(value["r"])
+
+	var g := _strict_float(value["g"])
+
+	var b := _strict_float(value["b"])
+
 	var alpha := 1.0
 
 	if value.has("a"):
-		alpha = float(
-			value["a"]
-		)
+
+		alpha = _strict_float(value["a"])
+
+		if alpha == null:
+			return _type_error("Color", value)
+
+	if r == null or g == null or b == null:
+
+		return _type_error("Color", value)
 
 	return {
 		"success": true,
-		"value": Color(
-			float(value["r"]),
-			float(value["g"]),
-			float(value["b"]),
-			alpha
-		)
+		"value": Color(r, g, b, alpha)
 	}
+
+
+# ==========================================
+# Strict numeric coercion
+# ==========================================
+# float("abc") and String-to-int coercion silently
+# produce 0 in GDScript - component values are
+# validated before use so malformed payloads fail
+# instead of fabricating zeroed vectors.
+
+
+func _strict_float(component) -> Variant:
+
+	if (
+		typeof(component) == TYPE_FLOAT
+		or typeof(component) == TYPE_INT
+	):
+		return float(component)
+
+	return null
+
+
+func _strict_int(component) -> Variant:
+
+	if typeof(component) == TYPE_INT:
+		return component
+
+	if typeof(component) == TYPE_FLOAT:
+		return int(component)
+
+	return null
 
 
 # ==========================================

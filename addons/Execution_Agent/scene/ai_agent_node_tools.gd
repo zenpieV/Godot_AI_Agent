@@ -1261,6 +1261,17 @@ func delete_node_from_request(
 		str(target_node.name)
 	)
 
+	# Owner preservation: the undo must restore the node's
+	# ORIGINAL owner. Nodes inside an instanced sub-scene
+	# are owned by the instance root, not the edited scene
+	# root - blindly re-owning to the edited root on undo
+	# converts instance-internal nodes into edited-scene
+	# nodes and corrupts the saved scene.
+
+	var original_owner: Node = (
+		target_node.get_owner()
+	)
+
 	undo_redo.create_action(
 		"AI Agent: Delete "
 		+ target_name
@@ -1288,7 +1299,7 @@ func delete_node_from_request(
 	undo_redo.add_undo_method(
 		target_node,
 		"set_owner",
-		edited_scene_root
+		original_owner
 	)
 
 	undo_redo.commit_action()
@@ -1448,6 +1459,17 @@ func reparent_node_from_request(
 		str(target_node.name)
 	)
 
+	# Owner preservation: a same-scene reparent keeps the
+	# node's existing owner valid (the edited root remains
+	# an ancestor), so owner is NOT rewritten - rewriting
+	# it corrupts instance-internal nodes. Only a node
+	# with no owner yet (never saved) gets claimed by the
+	# edited scene. Undo restores the exact original.
+
+	var original_owner: Node = (
+		target_node.get_owner()
+	)
+
 	undo_redo.create_action(
 		"AI Agent: Reparent "
 		+ target_name
@@ -1465,11 +1487,13 @@ func reparent_node_from_request(
 		target_node
 	)
 
-	undo_redo.add_do_method(
-		target_node,
-		"set_owner",
-		edited_scene_root
-	)
+	if original_owner == null:
+
+		undo_redo.add_do_method(
+			target_node,
+			"set_owner",
+			edited_scene_root
+		)
 
 	undo_redo.add_undo_method(
 		new_parent_node,
@@ -1493,7 +1517,7 @@ func reparent_node_from_request(
 	undo_redo.add_undo_method(
 		target_node,
 		"set_owner",
-		edited_scene_root
+		original_owner
 	)
 
 	undo_redo.commit_action()
