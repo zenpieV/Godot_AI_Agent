@@ -1246,7 +1246,12 @@ def execute_single_action(
 
         while waited_s < 600.0:
 
-            poll = _bridge_input.fetch_approval()
+            # Session-gated: a superseded agent's
+            # approval poll must never consume the
+            # active session's decision.
+            poll = _bridge_input.fetch_approval(
+                session_id=session_id
+            )
 
             if poll["reachable"] and poll["pending"]:
                 approved = poll["approved"]

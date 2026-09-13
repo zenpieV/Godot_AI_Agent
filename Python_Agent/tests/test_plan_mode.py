@@ -303,3 +303,40 @@ def test_read_request_raises_session_superseded(monkeypatch):
             sleep=lambda seconds: None,
             session_id="abc123",
         )
+
+
+def test_fetch_approval_passes_session_id(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"success": True, "pending": False, "approved": False}
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        bridge_input_module.urllib.request,
+        "urlopen",
+        fake_urlopen,
+    )
+
+    result = bridge_input_module.fetch_approval(
+        bridge_url="http://127.0.0.1:9999",
+        session_id="abc123",
+    )
+
+    assert captured["url"] == (
+        "http://127.0.0.1:9999/agent_approval?session_id=abc123"
+    )
+    assert result["reachable"] is True
+    assert result["pending"] is False

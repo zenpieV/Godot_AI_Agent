@@ -982,7 +982,9 @@ func route_request(
 		and path == "/agent_approval"
 	):
 
-		return state_store.consume_approval_snapshot()
+		return state_store.consume_approval_snapshot(
+			str(query.get("session_id", ""))
+		)
 
 	if (
 		method == "POST"

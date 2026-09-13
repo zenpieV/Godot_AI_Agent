@@ -191,13 +191,29 @@ def read_request(
         sleep(interval)
 
 
-def fetch_approval(bridge_url=None, timeout_seconds=None):
+def fetch_approval(
+    bridge_url=None,
+    timeout_seconds=None,
+    session_id=None,
+):
     """
     One consume-on-read GET /agent_approval. Returns
     {"reachable", "pending", "approved"}. Never raises.
+
+    session_id gates the poll to this session, mirroring
+    the input poll: a superseded agent's approval poll
+    must never consume the active session's decision.
     """
 
     url = (bridge_url or GODOT_BRIDGE_URL) + "/agent_approval"
+
+    if session_id:
+
+        url = (
+            url
+            + "?session_id="
+            + urllib.parse.quote(str(session_id))
+        )
 
     effective_timeout = (
         timeout_seconds

@@ -490,6 +490,41 @@ func _run_session_isolation_cases() -> void:
 	assert(legacy_only["pending"] == true)
 	assert(legacy_only["text"] == "legacy-only")
 
+	# 10. Approval gating: an approval decision belongs to
+	# the session that requested it. A poll from a foreign
+	# session must NOT consume it, or the stale process
+	# proceeds on the live session's behalf.
+	store.apply_event(
+		{
+			"event": "session_started",
+			"session_id": "sess-gate",
+		}
+	)
+	_apply(
+		{
+			"event": "approval_requested",
+			"approval_id": "ap-1",
+			"action": "delete_node",
+		}
+	)
+	assert(store.approval_id == "ap-1")
+
+	store.submit_approval_from_request({"approved": true})
+	assert(store.approval_decision == 1)
+
+	var foreign_approval = (
+		store.consume_approval_snapshot("sess-old")
+	)
+	assert(foreign_approval["pending"] == false)
+	assert(store.approval_decision == 1)
+
+	var own_approval = (
+		store.consume_approval_snapshot("sess-gate")
+	)
+	assert(own_approval["pending"] == true)
+	assert(own_approval["approved"] == true)
+	assert(store.approval_decision == -1)
+
 	print("session isolation cases passed")
 
 

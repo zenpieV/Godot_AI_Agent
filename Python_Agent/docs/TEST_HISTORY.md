@@ -3379,3 +3379,39 @@ request_full fallback behavior.
 Step-17 stop closed as provider quota exhaustion (visible in the
 panel now); batch preference, full-request chat rendering, error
 visibility, and three Activity-tab script errors shipped.
+
+# Pre-Public Audit Sweep (2026-09-13)
+
+## Scope
+
+Full plugin scan before making the repository public.
+
+## Findings and fixes
+
+- Approval-poll session gating (the one real bug): fetch_approval
+  carried no session id, so a superseded agent stuck in an
+  approval wait (approval mode enabled, bounded 600 s) could
+  consume the ACTIVE session's approval decision, making the real
+  agent hang until its bound. fetch_approval now takes
+  session_id, the agent passes it, the router forwards it, and
+  consume_approval_snapshot gates on session exactly like
+  consume_input_snapshot (no active session = served unchanged).
+  Harness case 10 covers foreign-poll non-consumption; pytest
+  covers the session_id query param.
+- run_agent_ui.bat used `python` instead of the `py` launcher the
+  plugin itself spawns with; aligned.
+- README.md rewritten for public consumption (was stale: still
+  described godot_bridge.gd as the bridge, no setup steps).
+- Audit-verified clean: no leftover respawn_pending references;
+  all Python compiles; git history contains NO secrets (.env was
+  never committed, no API-key patterns in any commit, personal
+  scratch files never committed, no absolute personal paths in
+  tracked files); the godot docs bundle in Python_Agent/data is
+  tracked (get_class_documentation works from a fresh clone);
+  chat layout verified full-width and wrap-correct at multiple
+  panel sizes (headless probe, grow and shrink).
+
+## Tests
+
+390 Python tests passed (+1 approval-session test), 22/22
+harnesses green.

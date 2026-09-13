@@ -1,58 +1,63 @@
 # Godot AI Agent
 
-An autonomous AI assistant for Godot that can understand and interact with the editor, with Python handling the AI side and a Godot plugin handling editor operations.
+An autonomous AI agent that operates inside the Godot editor: it reads natural-language requests, plans multi-step work, and executes real editor operations through a controlled, verified tool layer — while you watch (and steer) from a chat panel.
 
-## Project Structure
+Python handles the agent reasoning and model-provider integration; a Godot EditorPlugin exposes a local HTTP bridge and the editor-native tools the agent is allowed to use.
 
-- `Python_Agent/` - Python agent logic, model providers, tools, tests, and documentation
-- `addons/Execution_Agent/` - Godot EditorPlugin and editor-side bridge/tools
-- `godot_bridge.gd` - Godot-side bridge used by the agent
+## Features
 
-## Current Architecture
+- 74 registered actions across scene, node, property, script, scene-file, runtime, refactor, resource-file, and checkpoint domains — every mutation verified by read-back and recorded in a mutation ledger
+- Chat-first editor panel: requests in, thinking stream and answers out, plan/act modes, model selector, approval gates for mutations, New Session respawn
+- Session isolation: every session start is authoritative — stale agent processes are superseded and reap themselves; no context leaks between sessions
+- Multi-provider: Gemini, Z.ai, Groq, OpenRouter, and Ollama (local), switchable per turn; uniform structured-output validation and transient-error retry
+- Context compaction, batch execution with stop-on-failure boundaries, checkpoints, and headless self-tests (`run_project_tests`)
 
-The project is split into two main parts:
+## Requirements
 
-### Python Agent
+- **Windows** (the session launcher is Windows-specific)
+- **Godot 4.7.2**
+- **Python 3.10+** (the `py` launcher from python.org)
 
-Handles:
+## Setup
 
-- Agent reasoning and decisions
-- Model/provider integration
-- Tool dispatch
-- Agent sessions
-- Action validation and safety boundaries
-- Context management
-- Structured session telemetry: model calls, tool actions, batches, context compactions, token-usage normalization, and a session summary logged on termination
-- Tests
+1. Clone (or copy) this repository.
+2. Install the Python dependencies:
+   ```
+   py -m pip install -r Python_Agent/requirements.txt
+   ```
+3. Create `Python_Agent/.env` with at least one provider key, e.g.:
+   ```
+   GEMINI_API_KEY=your_key_here
+   ```
+4. Open the project in Godot. The **AI Agent** panel appears at the bottom of the editor.
+5. Press **START SESSION** — a console window opens (that is the agent's log; keep it open). Type a request in the chat and go.
 
-Gemini is currently the primary cloud model, with Ollama/Qwen available for local inference.
+Everything runs locally: the bridge listens on `127.0.0.1:8081` only, and the only external traffic is the model API calls made with your own keys.
 
-### Godot Plugin
+## Architecture
 
-Handles:
+- `addons/Execution_Agent/` — the EditorPlugin: HTTP bridge, action router, tool implementations (scene, node, property, script, scene-file, runtime, refactor, resource-file, checkpoint tools), and the chat panel
+- `Python_Agent/` — the agent: conversation loop, provider adapters, action registry and schemas, batch/boundary enforcement, mutation contract, telemetry, and the headless test harness runner
 
-- Communication with the Python agent
-- Scene inspection
-- Node operations
-- Property operations
-- Editor-native changes
-- Undo/redo integration
+The agent never touches the editor directly: every action is validated against a schema, classified as read-only or mutation, gated by the approval mode, executed by the plugin, and verified before its result is reported back.
 
 ## Documentation
 
-Project documentation is located in:
+Detailed and current docs live in `Python_Agent/docs/`:
 
-`Python_Agent/docs/`
+- `TOOL_PROTOCOL.md` — every action, request/response shapes, verification fields
+- `CURRENT_STATE.md` — implementation status
+- `TEST_HISTORY.md` — what has been tested and validated, including known limitations
+- `ROADMAP.md`, `PROVIDER_ARCHITECTURE.md`, `AGENT_HANDOFF.md`
 
-Important documents include:
+## Tests
 
-- `CURRENT_STATE.md`
-- `AGENT_HANDOFF.md`
-- `PROVIDER_ARCHITECTURE.md`
-- `TOOL_PROTOCOL.md`
-- `ROADMAP.md`
-- `TEST_HISTORY.md`
+- Python: `py -m pytest tests/` from `Python_Agent/`
+- Godot harnesses: the agent's own `run_project_tests` action, or any harness directly:
+  ```
+  Godot_v4.7.2-stable_win64_console.exe --headless --path . --script res://addons/Execution_Agent/tests/property_tools_harness.gd
+  ```
 
 ## Status
 
-This project is actively being developed toward an autonomous AI assistant that can safely operate inside the Godot Editor.
+Actively developed. Public version: session isolation, verified file management, model-selection passthrough, and the panel UX described above. See `Python_Agent/docs/ROADMAP.md` for what is next.

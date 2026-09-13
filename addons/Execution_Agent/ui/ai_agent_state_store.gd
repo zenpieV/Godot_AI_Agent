@@ -889,7 +889,31 @@ func submit_approval_from_request(data: Dictionary) -> Dictionary:
 }
 
 
-func consume_approval_snapshot() -> Dictionary:
+func consume_approval_snapshot(
+	requested_session_id: String = ""
+) -> Dictionary:
+
+	# Session gating, mirroring consume_input_snapshot: an
+	# approval decision belongs to the session that
+	# requested it. A poll from a DIFFERENT session (a
+	# superseded agent still waiting on its own gate) or
+	# an unidentified (legacy) poller must never consume
+	# the active session's approval decision - otherwise
+	# the stale process proceeds on the new session's
+	# behalf and the real agent hangs until its 600 s
+	# bound. With no active session, polls are served
+	# unchanged.
+
+	if (
+		session_id != ""
+		and requested_session_id != session_id
+	):
+
+		return {
+			"success": true,
+			"pending": false,
+			"approved": false,
+		}
 
 	last_input_poll_ms = Time.get_ticks_msec()
 
