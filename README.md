@@ -18,7 +18,27 @@ Python handles the agent reasoning and model-provider integration; a Godot Edito
 - **Godot 4.7.2**
 - **Python 3.10+** (the `py` launcher from python.org)
 
-## Setup
+## Installing into another project (Release zip)
+
+Download the latest release zip from the [Releases](../../releases) page and extract it **into your project root**. The zip contains exactly the two folders a project needs:
+
+```
+your_project/
+├─ project.godot
+├─ addons/
+│  └─ Execution_Agent/    ← from the zip
+└─ Python_Agent/          ← from the zip
+   └─ .env                ← you create this
+```
+
+Then, from `your_project/Python_Agent`:
+
+1. `py -m pip install -r requirements.txt`
+2. Create `.env` with at least one provider key (e.g. `GEMINI_API_KEY=your_key_here` — a free Gemini key from [aistudio.google.com](https://aistudio.google.com) is enough to start).
+3. Open the project in Godot and enable **"zenpieV's AI Agent"** under Project Settings → Plugins.
+4. Open the **AI Agent** panel at the bottom of the editor and press **START SESSION**. Keep the console window open — it is the agent's log.
+
+## Setup (development repository)
 
 1. Clone (or copy) this repository.
 2. Install the Python dependencies:
@@ -33,6 +53,20 @@ Python handles the agent reasoning and model-provider integration; a Godot Edito
 5. Press **START SESSION** — a console window opens (that is the agent's log; keep it open). Type a request in the chat and go.
 
 Everything runs locally: the bridge listens on `127.0.0.1:8081` only, and the only external traffic is the model API calls made with your own keys.
+
+## Building a release
+
+The release zip is built by a script that reads the plugin version and guarantees that secrets and machine-local files (`.env`, virtual environments, logs, caches) are never included:
+
+```
+py make_release.py
+```
+
+Produces `Godot_AI_Agent-plugin-<version>.zip` (version from `addons/Execution_Agent/plugin.cfg`). Attach it to a GitHub Release, e.g.:
+
+```
+gh release create v<version> Godot_AI_Agent-plugin-<version>.zip --title "v<version>" --notes "First public release."
+```
 
 ## Architecture
 
